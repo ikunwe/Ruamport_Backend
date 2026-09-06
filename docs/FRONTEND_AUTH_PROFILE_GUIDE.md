@@ -377,7 +377,392 @@ this.supabase.auth.onAuthStateChange((event, session) => {
 
 ระวังไม่เรียก `/auth/me` ซ้ำจากทั้ง callback, guard และ auth listener พร้อมกัน ควรมี service กลางที่ cache/in-flight share request
 
-## 12. Error Handling
+## 12. Dime PDF Upload Preview
+
+Backend มี endpoint สำหรับทดสอบอัปโหลดและอ่านข้อความจาก Dime PDF แล้ว:
+
+```http
+POST /api/v1/trades/upload-preview
+Authorization: Bearer ACCESS_TOKEN
+Content-Type: multipart/form-data
+```
+
+Endpoint นี้เป็น **Structured Preview** และยังไม่บันทึก Transaction โดยทำงานดังนี้:
+
+```text
+รับ PDF จากผู้ใช้
+→ เก็บไฟล์ใน Memory ชั่วคราว
+→ ตรวจชนิดและขนาดไฟล์
+→ ใช้ pdfPassword เปิดไฟล์ (ถ้ามี)
+→ แยกข้อความ
+→ ดึงเฉพาะคำสั่งซื้อขาย ค่าธรรมเนียม ภาษี และยอดรวม
+→ ตรวจความถูกต้องของยอดเงิน
+→ คืน Structured JSON
+→ ไม่คืน Raw Text และไม่บันทึก PDF, Password หรือ Transaction
+```
+
+### Request fields
+
+| Field | Required | รายละเอียด |
+|---|---:|---|
+| `file` | ใช่ | PDF หนึ่งไฟล์ ขนาดไม่เกิน 10 MB |
+| `pdfPassword` | ไม่ | รหัสเปิด Dime PDF ความยาวไม่เกิน 128 ตัวอักษร |
+
+ชื่อ field ต้องเป็น `file` และ `pdfPassword` ตรงตามนี้
+
+ตัวอย่าง Angular service:
+
+```ts
+export interface PdfUploadPreviewResponse {
+  file: {
+    name: string;
+    size: number;
+    mimeType: string;
+    pageCount: number | null;
+  };
+  document: {
+    type: 'DIME_OFFSHORE_CONFIRMATION_NOTE';
+    documentNumber: string | null;
+    taxInvoiceNumber: string | null;
+    accountNumber: string | null;
+    issueDate: string | null;
+    effectiveDate: string | null;
+    deduplicationKey: string | null;
+  };
+  orders: Array<{
+    orderId: string;
+    tradeDate: string | null;
+    settlementDate: string;
+    transactionCode: 'BUY' | 'SEL' | 'SELL' | 'REW' | 'EXC' | 'EXP';
+    transactionType: 'BUY' | 'SELL' | 'REWARD' | 'EXERCISE_CALL' | 'EXERCISE_PUT';
+    symbol: string;
+    exchange: string;
+    units: number;
+    unitPrice: number;
+    currency: string;
+    grossAmount: { foreign: number; thb: number };
+    feeIncludeVat: { foreign: number; thb: number };
+    withholdingTax: { foreign: number; thb: number };
+    totalAmount: { foreign: number; thb: number };
+  }>;
+  summary: {
+    currency: 'THB';
+    totalBuy: number;
+    totalSell: number;
+    totalFeeExcludeVat: number;
+    discount: number;
+    totalFeeAfterDiscountExcludeVat: number;
+    totalVat: number;
+    withholdingTax: number;
+  } | null;
+  calculation: {
+    totalFeeIncludeVatAfterDiscount: number | null;
+    totalFeesAndTaxes: number | null;
+    netCashFlow: number | null;
+    cashFlowType: 'CASH_IN' | 'CASH_OUT' | 'NONE' | null;
+  };
+  validation: {
+    isValid: boolean;
+    warnings: Array<{ code: string; orderId?: string }>;
+  };
+}
+
+uploadPdfPreview(file: File, pdfPassword?: string) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  if (pdfPassword) {
+    formData.append('pdfPassword', pdfPassword);
+  }
+
+  return this.http.post<PdfUploadPreviewResponse>(
+    `${environment.apiUrl}/trades/upload-preview`,
+    formData,
+  );
+}
+```
+
+ห้ามกำหนด `Content-Type: multipart/form-data` ด้วยตัวเองใน Angular เพราะ Browser ต้องสร้าง `boundary` ให้ แต่ Auth interceptor ยังต้องแนบ `Authorization` ตามปกติ
+
+### Response
+
+```json
+{
+  "file": {
+    "name": "confirmation-note.pdf",
+    "size": 245801,
+    "mimeType": "application/pdf",
+    "pageCount": 2
+  },
+  "document": {
+    "type": "DIME_OFFSHORE_CONFIRMATION_NOTE",
+    "documentNumber": "2026082500095303",
+    "taxInvoiceNumber": "DIMEOS20260825095303",
+    "accountNumber": "80000834017",
+    "issueDate": "2026-08-25",
+    "effectiveDate": "2026-08-24",
+    "deduplicationKey": "DIME_OFFSHORE_CONFIRMATION_NOTE:2026082500095303"
+  },
+  "orders": [
+    {
+      "orderId": "219884",
+      "tradeDate": "2026-08-24",
+      "settlementDate": "2026-08-25",
+      "transactionCode": "BUY",
+      "transactionType": "BUY",
+      "symbol": "RKLB",
+      "exchange": "XNAS",
+      "units": 0.4331164,
+      "unitPrice": 69.15,
+      "currency": "USD",
+      "grossAmount": { "foreign": 29.95, "thb": 972.87 },
+      "feeIncludeVat": { "foreign": 0.05, "thb": 1.62 },
+      "withholdingTax": { "foreign": 0, "thb": 0 },
+      "totalAmount": { "foreign": 30, "thb": 974.49 }
+    }
+  ],
+  "summary": {
+    "currency": "THB",
+    "totalBuy": 974.49,
+    "totalSell": 0,
+    "totalFeeExcludeVat": 1.52,
+    "discount": 0,
+    "totalFeeAfterDiscountExcludeVat": 1.52,
+    "totalVat": 0.11,
+    "withholdingTax": 0
+  },
+  "calculation": {
+    "totalFeeIncludeVatAfterDiscount": 1.63,
+    "totalFeesAndTaxes": 1.63,
+    "netCashFlow": -974.49,
+    "cashFlowType": "CASH_OUT"
+  },
+  "validation": {
+    "isValid": true,
+    "warnings": []
+  }
+}
+```
+
+- `foreign` คือจำนวนเงินตาม `currency` ของรายการ เช่น USD
+- `thb` คือจำนวนเงินบาทที่ Dime แสดงในเอกสาร
+- `tradeDate` คือวันที่ซื้อขายจริงจาก `วันที่คำสั่งมีผล / Effective Date` ให้ Frontend ใช้เป็นวันที่ของรายการ
+- `settlementDate` คือ `วันที่ครบกำหนดชำระ / Settlement Date` ไม่ใช่วันที่ซื้อขาย
+- `documentNumber` คือเลข `No.` ของ Confirmation Note ใช้เป็นเลขหลักสำหรับตรวจเอกสารซ้ำต่อผู้ใช้
+- `taxInvoiceNumber` คือเลข `Tax Invoice No.` สำหรับอ้างอิงใบกำกับภาษี
+- `deduplicationKey` คือ key มาตรฐานที่ Backend สร้างสำหรับตรวจเอกสารซ้ำต่อผู้ใช้
+- `transactionCode` คือรหัสต้นฉบับจาก Dime ส่วน `transactionType` คือค่าที่ normalize แล้ว:
+  `BUY → BUY`, `SEL/SELL → SELL`, `REW → REWARD`, `EXC → EXERCISE_CALL`, `EXP → EXERCISE_PUT`
+
+### Mutual Fund Confirmation Note
+
+เมื่อ `document.type` เป็น `DIME_MUTUAL_FUND_CONFIRMATION_NOTE` จะได้รายการกองทุน
+และยอดรวมในสกุลบาท โดยใช้ endpoint อัปโหลดเดิม
+
+```json
+{
+  "document": {
+    "type": "DIME_MUTUAL_FUND_CONFIRMATION_NOTE",
+    "documentNumber": "DN 202608141359",
+    "taxInvoiceNumber": "DIMEMF20260811002540",
+    "accountNumber": "101738738454892",
+    "issueDate": "2026-08-11",
+    "effectiveDate": "2026-08-11",
+    "deduplicationKey": "DIME_MUTUAL_FUND_CONFIRMATION_NOTE:DN-202608141359"
+  },
+  "orders": [
+    {
+      "orderId": "2202608110004728",
+      "tradeDate": "2026-08-11",
+      "transactionCode": "SUB",
+      "transactionType": "SUBSCRIPTION",
+      "fundName": "SCBS&P500",
+      "units": 3.3902,
+      "navPerUnit": 29.4963,
+      "currency": "THB",
+      "totalAmount": 100,
+      "feeIncludeVat": 0.49
+    }
+  ],
+  "summary": {
+    "currency": "THB",
+    "totalSubscription": 100,
+    "totalSwitchIn": 0,
+    "totalRedemption": 0,
+    "totalSwitchOut": 0,
+    "totalFeeExcludeVat": 0.46,
+    "totalVat": 0.03,
+    "totalFeeIncludeVat": 0.49,
+    "brokerageExpensePaidToFund": 0.04
+  },
+  "calculation": {
+    "netCashFlow": -100,
+    "cashFlowType": "CASH_OUT"
+  },
+  "validation": {
+    "isValid": true,
+    "warnings": []
+  }
+}
+```
+
+รหัสรายการกองทุนถูก normalize ดังนี้:
+`SUB → SUBSCRIPTION`, `RED → REDEMPTION`, `SWI → SWITCH_IN`, `SWO → SWITCH_OUT`
+
+### Thai Stock Confirmation Note
+
+เมื่อ `document.type` เป็น `DIME_THAI_STOCK_CONFIRMATION_NOTE` จะได้รายการหุ้นไทย
+พร้อมวันที่ซื้อขาย วันที่ชำระ ค่าธรรมเนียม และ VAT
+
+```json
+{
+  "document": {
+    "type": "DIME_THAI_STOCK_CONFIRMATION_NOTE",
+    "documentNumber": "TH2026090300011218",
+    "taxInvoiceNumber": "DIMETH2026090300011218",
+    "accountNumber": "97507514",
+    "issueDate": "2026-09-03",
+    "effectiveDate": "2026-09-03",
+    "deduplicationKey": "DIME_THAI_STOCK_CONFIRMATION_NOTE:TH2026090300011218"
+  },
+  "orders": [
+    {
+      "orderId": "031642183181",
+      "tradeDate": "2026-09-03",
+      "settlementDate": "2026-09-07",
+      "transactionCode": "BUY",
+      "transactionType": "BUY",
+      "symbol": "ASK",
+      "units": 5,
+      "pricePerShare": 10.2,
+      "currency": "THB",
+      "grossAmount": 51,
+      "feeExcludeVat": 0.08,
+      "vat": 0.01,
+      "totalAmount": 51.09
+    }
+  ],
+  "summary": {
+    "currency": "THB",
+    "totalBuy": 51.09,
+    "totalSell": 0,
+    "totalFeeExcludeVat": 0.08,
+    "totalVat": 0.01,
+    "netCustomerAmount": 51.09,
+    "netCustomerDirection": "PAID"
+  },
+  "calculation": {
+    "totalFeesAndTaxes": 0.09,
+    "netCashFlow": -51.09,
+    "cashFlowType": "CASH_OUT"
+  },
+  "validation": {
+    "isValid": true,
+    "warnings": []
+  }
+}
+```
+
+รหัสรายการหุ้นไทย: `BUY → BUY`, `SEL/SELL → SELL`, `REW → REWARD`
+- `totalFeeIncludeVatAfterDiscount` คำนวณจาก `totalFeeExcludeVat - discount + totalVat`
+- ฝั่ง Frontend แสดงค่าธรรมเนียมรวม VAT หลังส่วนลดได้โดยใช้
+  `{{ formatAmount(preview.calculation?.totalFeeIncludeVatAfterDiscount ?? 0) }}`
+  โดยไม่ต้องนำ `discount` มาลบซ้ำอีก
+
+### Monthly Statement
+
+Endpoint เดิมตรวจชนิดเอกสารอัตโนมัติ เมื่อ `document.type` เป็น
+`DIME_MONTHLY_STATEMENT` response จะมี `overview`, `assetAllocation` และ
+`holdings` แทน `orders` และ `summary` ของ Confirmation Note
+
+```json
+{
+  "document": {
+    "type": "DIME_MONTHLY_STATEMENT",
+    "documentNumber": null,
+    "statementMonth": "2026-06",
+    "asOfDate": "2026-06-30",
+    "accountNumber": "80000834017",
+    "baseCurrency": "USD",
+    "exchangeRate": {
+      "from": "USD",
+      "to": "THB",
+      "rate": 33.1,
+      "source": "BOT"
+    },
+    "deduplicationKey": "DIME_MONTHLY_STATEMENT:80000834017:2026-06"
+  },
+  "overview": {
+    "portfolioValue": { "usd": 1441.35, "thb": 47714.61 },
+    "cashBalance": { "usd": 31.84, "thb": 1054.04 },
+    "totalAccountValue": {
+      "usd": 1473.19,
+      "thb": 48768.65,
+      "derived": true
+    },
+    "investmentReturn": {
+      "percentage": 12.04,
+      "usd": 154.89,
+      "thb": 5127.62,
+      "includesDividends": false
+    }
+  },
+  "assetAllocation": {
+    "assetClasses": [],
+    "sectors": []
+  },
+  "holdings": [],
+  "validation": {
+    "isValid": true,
+    "warnings": []
+  }
+}
+```
+
+- `portfolioValue` คือมูลค่าหลักทรัพย์ในพอร์ต
+- `cashBalance` คือเงินสดที่ยังอยู่ในบัญชี Dime
+- `totalAccountValue` เป็นค่าที่ Backend คำนวณจากสองค่าข้างต้น
+- Monthly Statement รอบนี้ยังไม่ส่งข้อมูลจุดกราฟย้อนหลัง
+- Monthly Statement ไม่มีเลข `No.` ในเอกสาร จึงใช้เลขบัญชีร่วมกับเดือนรายงานสร้าง `deduplicationKey`
+- `totalFeesAndTaxes` คือค่าธรรมเนียมหลังหักส่วนลดรวม VAT แล้วบวก Withholding Tax
+- `netCashFlow < 0` หมายถึงเงินออกจากบัญชี และ `> 0` หมายถึงเงินเข้า
+- `validation.warnings` แจ้งยอดที่ไม่ตรงกัน โดย Frontend ต้องไม่อนุญาต Import ต่อเมื่อ `isValid` เป็น `false`
+- `pageCount` อาจเป็น `null` ถ้า parser ไม่คืนข้อมูลจำนวนหน้า
+
+### UI flow ที่แนะนำ
+
+```text
+เลือก PDF
+→ ถามรหัสเปิดไฟล์ (ถ้ามี)
+→ กด Preview
+→ แสดง Loading
+→ สำเร็จ: แสดงตาราง Orders และสรุปยอดซื้อ/ขาย/ค่าธรรมเนียม/ภาษี
+→ ถ้า validation ไม่ผ่าน: แสดงคำเตือนและยังไม่ให้ยืนยัน Import
+→ รหัสผิด: ให้กรอกใหม่
+→ ไม่มีข้อความ: แจ้งว่าไฟล์อาจเป็นภาพสแกน
+```
+
+Frontend ห้ามเขียน `pdfPassword` หรือข้อมูลคำสั่งซื้อขายลง console, localStorage, analytics หรือ error-reporting service และควรล้างออกจาก state เมื่อออกจากหน้าหรือเลือกไฟล์ใหม่
+
+### PDF upload errors
+
+| HTTP | Code | การแสดงผล |
+|---:|---|---|
+| 400 | `PDF_FILE_REQUIRED` | กรุณาเลือกไฟล์ PDF |
+| 400 | `INVALID_PDF` | ไฟล์ไม่มีโครงสร้าง PDF ที่ถูกต้อง |
+| 400 | `INVALID_PDF_PASSWORD` | รูปแบบรหัส PDF ไม่ถูกต้อง |
+| 400 | `UPLOAD_ERROR` | Request อัปโหลดไม่ถูกต้อง |
+| 401 | `UNAUTHORIZED` | Session หมดอายุ ให้ Login ใหม่ |
+| 413 | `PDF_TOO_LARGE` | ไฟล์ต้องมีขนาดไม่เกิน 10 MB |
+| 415 | `PDF_FILE_REQUIRED` | รองรับเฉพาะไฟล์ PDF |
+| 422 | `PDF_PASSWORD_REQUIRED` | ไฟล์มีรหัสผ่าน กรุณากรอกรหัส |
+| 422 | `PDF_PASSWORD_INVALID` | รหัสเปิด PDF ไม่ถูกต้อง |
+| 422 | `PDF_TEXT_NOT_FOUND` | ไม่พบข้อความ อาจเป็น PDF แบบภาพ |
+| 422 | `PDF_PARSE_FAILED` | PDF เสียหรือเป็นรูปแบบที่ยังไม่รองรับ |
+| 422 | `NOT_DIME_CONFIRMATION` | เอกสารไม่ใช่ Dime Confirmation Note |
+| 422 | `DIME_ORDERS_NOT_FOUND` | ไม่พบตารางคำสั่งซื้อขายที่รองรับ |
+
+## 13. Error Handling
 
 Frontend ควรรองรับ error codes เหล่านี้:
 
@@ -394,7 +779,7 @@ Frontend ควรรองรับ error codes เหล่านี้:
 
 ห้ามแสดง stack trace หรือรายละเอียด Supabase error ภายในให้ผู้ใช้เห็น
 
-## 13. สิ่งที่ Backend ยังต้องเพิ่ม
+## 14. สิ่งที่ Backend ยังต้องเพิ่ม
 
 Frontend สามารถเตรียม interface ไว้ก่อนได้ แต่ยังไม่ควรเรียก endpoint ที่ไม่มีจริง:
 
@@ -402,11 +787,11 @@ Frontend สามารถเตรียม interface ไว้ก่อนไ
 - เพิ่ม recent-authentication check ก่อนเปลี่ยน Password สำหรับ production
 - Gmail connection และ sync endpoints
 - Microsoft Graph connection และ sync endpoints
-- Direct PDF upload endpoint
+- Production PDF import endpoint ที่ parse และบันทึก Transaction (ปัจจุบันมีเฉพาะ Preview)
 
 Frontend ห้าม update `profiles` ผ่าน Supabase client โดยตรง
 
-## 14. Frontend Checklist
+## 15. Frontend Checklist
 
 - [ ] Social login รองรับ Google/Facebook และ Apple เมื่อพร้อม
 - [ ] Auth callback อ่าน Supabase session สำเร็จ
@@ -424,3 +809,12 @@ Frontend ห้าม update `profiles` ผ่าน Supabase client โดย�
 - [ ] รองรับ 401 โดยล้าง session
 - [ ] ทดสอบ Google แล้ว Login Facebook ด้วย Email เดียวกัน
 - [ ] ยืนยันว่าชื่อ รูป และ Username ไม่เปลี่ยนตาม Provider ล่าสุด
+- [ ] มี PDF file picker หรือ drag-and-drop ที่รับไฟล์เดียว
+- [ ] จำกัดไฟล์ PDF ไม่เกิน 10 MB ที่หน้า UI
+- [ ] ส่ง `file` และ `pdfPassword` ด้วย `FormData`
+- [ ] ไม่กำหนด multipart `Content-Type` เอง
+- [ ] แสดง Loading และป้องกันการกด Upload ซ้ำ
+- [ ] รองรับ `PDF_PASSWORD_REQUIRED` และ `PDF_PASSWORD_INVALID`
+- [ ] ไม่ log หรือ persist `pdfPassword` และข้อมูลคำสั่งซื้อขาย
+- [ ] แสดง Orders, Summary, Net Cash Flow และ Validation warnings จาก response
+- [ ] แสดงให้ชัดว่า Preview ยังไม่ได้บันทึก Transaction

@@ -67,6 +67,17 @@ Login deliberately returns the same `INVALID_CREDENTIALS` response for an unknow
 
 Password length rules apply when setting or changing a password, not when attempting login. Any non-empty but incorrect login password returns `401 INVALID_CREDENTIALS`.
 
+## PDF ingestion preview
+
+`POST /api/v1/trades/upload-preview` accepts one PDF in memory, supports password-protected Dime PDFs, and auto-detects offshore stock confirmation notes, Thai stock confirmation notes, mutual fund confirmation notes, and offshore monthly statements. It returns structured trade or portfolio preview data without writing a transaction or storing the file.
+
+Send `multipart/form-data` with:
+
+- `file` — required PDF, maximum 10 MB
+- `pdfPassword` — optional password for an encrypted Dime PDF
+
+The endpoint requires a Supabase Bearer access token. The password, PDF, and raw extracted text are not persisted or returned. The structured preview is intended for parser validation before transaction import is enabled.
+
 ## Project structure
 
 ```text
