@@ -4,7 +4,7 @@ Express REST API for the Smart Portfolio Tracker described in the frontend READM
 
 ## Run locally
 
-Requires Node.js 18 or newer.
+Requires Node.js 24 or newer (the PDF reader and built-in environment-file support use a modern Node runtime).
 
 ```bash
 copy .env.example .env
@@ -12,6 +12,20 @@ npm run dev
 ```
 
 The first endpoint is `GET http://localhost:3000/api/v1/health`.
+
+## Gmail sync preview
+
+Gmail mail-read consent is separate from Supabase login. Connect once, then manually scan Dime PDF emails over the last 1 or 2 months and return the existing parser's preview without saving investments. Outlook mail sync is not implemented yet.
+
+- `GET /api/v1/mail/connection`
+- `POST /api/v1/mail/gmail/connect`
+- `GET /api/v1/mail/gmail/callback` — Google redirect only
+- `POST /api/v1/mail/gmail/sync-preview`
+- `DELETE /api/v1/mail/gmail/connection`
+
+Run migration `006_gmail_preview_connections.sql`, configure the Gmail variables in `.env.example`, enable Gmail API and register the backend OAuth callback in Google Cloud before testing with real mail. All mail endpoints except the callback require a Supabase Bearer token.
+
+See [Frontend mail-sync flow and setup](docs/FRONTEND_MAIL_SYNC_PREVIEW_GUIDE.md) for request/response, password retry, pagination and limits.
 
 Set `CORS_ORIGINS` to the comma-separated list of Angular origins allowed to call the API. Development defaults to `http://localhost:4200`.
 

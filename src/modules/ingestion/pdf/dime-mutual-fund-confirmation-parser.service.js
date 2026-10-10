@@ -52,14 +52,14 @@ function extractDocument(text) {
 }
 
 function extractOrders(text, tradeDate) {
-  const pattern = /(?:^|\n)(?<orderId>\d{16})\s+(?<code>SUB|RED|SWI|SWO)\s+(?<fundName>\S+)\s+(?<units>[\d,.]+)\s+(?<feeIncludeVat>[\d,.]+)\s+(?<totalAmount>[\d,.]+)\s+(?<navPerUnit>[\d,.]+)(?:\n|$)/g;
+  const pattern = /(?:^|\n)(?<orderId>\d{16})\s+(?<code>SUB|RED|SWI|SWO)\s+(?<fundName>[^\n]+?)\s+(?<units>[\d,.]+)\s+(?<feeIncludeVat>[\d,.]+)\s+(?<totalAmount>[\d,.]+)\s+(?<navPerUnit>[\d,.]+)(?:\n|$)/g;
 
   return [...text.matchAll(pattern)].map((match) => ({
     orderId: match.groups.orderId,
     tradeDate,
     transactionCode: match.groups.code,
     transactionType: TRANSACTION_TYPES[match.groups.code],
-    fundName: match.groups.fundName,
+    fundName: match.groups.fundName.trim(),
     units: parseNumber(match.groups.units),
     navPerUnit: parseNumber(match.groups.navPerUnit),
     currency: 'THB',
