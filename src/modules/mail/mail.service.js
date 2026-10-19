@@ -6,7 +6,8 @@ const { encryptionKey, encrypt, decrypt, hash } = require('./mail-crypto');
 const { createGmailClient, READ_SCOPE } = require('./gmail-client');
 const { createMailRepository } = require('./mail.repository');
 const { dateRange, collectPreview } = require('./mail-preview.service');
-function createMailService({ config = env, repository = createMailRepository(), client = createGmailClient(config), now = () => new Date(), collect = collectPreview } = {}) {
+const { createInvestmentService } = require('../trades/investment.service');
+function createMailService({ config = env, repository = createMailRepository(), client = createGmailClient(config), now = () => new Date(), collect = collectPreview, investments = createInvestmentService() } = {}) {
   const syncing = new Set();
   function configured() {
     const names = ['gmailClientId', 'gmailClientSecret', 'gmailRedirectUri', 'gmailFrontendReturnUrl'];
@@ -27,7 +28,8 @@ function createMailService({ config = env, repository = createMailRepository(), 
     try {
       if (typeof value !== 'string' || value.length > 8192) throw new Error();
       const data = JSON.parse(decrypt(value, key));
-      if (data.userId !== user.id || data.months !== months || data.expiresAt <= now().getTime() || !Number.isFinite(Date.parse(data.range?.start)) || !Number.isFinite(Date.parse(data.range?.end))) throw new Error();
+      const validStart = months === 'all' ? data.range?.start === null : Number.isFinite(Date.parse(data.range?.start));
+      if (data.userId !== user.id || data.months !== months || data.expiresAt <= now().getTime() || !validStart || !Number.isFinite(Date.parse(data.range?.end))) throw new Error();
       return data;
     } catch { throw new AppError(400, 'INVALID_MAIL_CURSOR', 'Preview cursor is invalid or expired; start a new sync'); }
   }
@@ -77,8 +79,8 @@ function createMailService({ config = env, repository = createMailRepository(), 
       requireGmail(user);
       const key = configured();
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new AppError(400, 'INVALID_SYNC_REQUEST', 'Send a JSON object');
-      const months = body.months ?? 1;
-      if (![1, 2].includes(months)) throw new AppError(400, 'INVALID_SYNC_MONTHS', 'months must be 1 or 2');
+      const months = body.months ?? 'all';
+      if (![1, 2, 'all'].includes(months)) throw new AppError(400, 'INVALID_SYNC_MONTHS', 'months must be 1, 2 or "all"');
       if (body.pdfPassword !== undefined && (typeof body.pdfPassword !== 'string' || body.pdfPassword.length > 128)) throw new AppError(400, 'INVALID_PDF_PASSWORD', 'PDF password must be a string of at most 128 characters');
       const data = body.cursor !== undefined ? readCursor(body.cursor, user, months, key) : { userId: user.id, months, range: dateRange(months, now()), pageToken: null, expiresAt: now().getTime() + 60 * 60 * 1000 };
       if (syncing.has(user.id)) throw new AppError(409, 'MAIL_SYNC_BUSY', 'A preview sync is already running');
@@ -88,8 +90,36 @@ function createMailService({ config = env, repository = createMailRepository(), 
         if (!connection || connection.email.toLowerCase() !== user.email.toLowerCase()) throw new AppError(409, 'MAIL_NOT_CONNECTED', 'Connect Gmail first');
         const tokens = await client.refresh(decrypt(connection.refresh_token_encrypted, key));
         if (!tokens.access_token) throw new AppError(401, 'MAIL_RECONNECT_REQUIRED', 'Reconnect Gmail');
-        const batch = await collect({ client, token: tokens.access_token, range: data.range, domains: config.dimeMailSenderDomains, pageToken: data.pageToken, password: body.pdfPassword });
-        return { mode: 'PREVIEW_ONLY', months, range: data.range, scannedMessages: batch.scannedMessages, results: batch.results, hasMore: Boolean(batch.nextPageToken), nextCursor: batch.nextPageToken ? cursor({ ...data, pageToken: batch.nextPageToken }, key) : null, retryCursor: cursor(data, key), counts: { ready: batch.results.filter(item => item.status === 'READY').length, failed: batch.results.filter(item => item.status !== 'READY').length } };
+        const batch = await collect({ client, token: tokens.access_token, range: data.range, domains: config.dimeMailSenderDomains, pageToken: data.pageToken, password: body.pdfPassword, persistence: investments, userId: user.id, mailbox: user.email });
+        const counts = {
+          ready: batch.results.filter(item => item.status === 'READY').length,
+          alreadyRead: batch.results.filter(item => item.status === 'ALREADY_READ').length,
+          alreadyImported: batch.results.filter(item => item.status === 'ALREADY_IMPORTED').length,
+          failed: batch.results.filter(item => !['READY', 'ALREADY_READ', 'ALREADY_IMPORTED'].includes(item.status)).length,
+        };
+        const totals = {
+          scannedMessages: (data.totals?.scannedMessages ?? 0) + batch.scannedMessages,
+          foundPdfCount: (data.totals?.foundPdfCount ?? 0) + batch.foundPdfCount,
+          readyPdfCount: (data.totals?.readyPdfCount ?? 0) + counts.ready,
+          alreadyReadPdfCount: (data.totals?.alreadyReadPdfCount ?? 0) + counts.alreadyRead,
+          alreadyImportedPdfCount: (data.totals?.alreadyImportedPdfCount ?? 0) + counts.alreadyImported,
+          unreadableMessages: (data.totals?.unreadableMessages ?? 0) + batch.unreadableMessages,
+          failedCount: (data.totals?.failedCount ?? 0) + counts.failed,
+        };
+        const hasMore = Boolean(batch.nextPageToken);
+        const countIsExact = !hasMore && totals.unreadableMessages === 0;
+        const hasNewData = totals.readyPdfCount > 0;
+        const noNewData = !hasMore && totals.failedCount === 0 ? !hasNewData : null;
+        const syncStatus = hasMore ? 'SCANNING' : totals.failedCount > 0 ? 'COMPLETED_WITH_ERRORS' : hasNewData ? 'NEW_DATA_FOUND' : 'NO_NEW_DATA';
+        return {
+          mode: 'PREVIEW_ONLY', months, range: data.range,
+          scannedMessages: batch.scannedMessages, foundPdfCount: batch.foundPdfCount,
+          results: batch.results, counts, hasMore, hasNewData, noNewData, syncStatus,
+          progress: { ...totals, searchComplete: !hasMore, countIsExact, totalPdfCount: countIsExact ? totals.foundPdfCount : null },
+          // Advance totals only on nextCursor. Retrying the same page must not add it twice.
+          nextCursor: hasMore ? cursor({ ...data, totals, pageToken: batch.nextPageToken }, key) : null,
+          retryCursor: cursor(data, key),
+        };
       } finally { syncing.delete(user.id); }
     },
     async disconnect(user) {
