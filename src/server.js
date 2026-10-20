@@ -5,6 +5,7 @@ const app = createApp();
 
 const server = app.listen(env.port, () => {
   console.log(`Portfolio API listening on port ${env.port}`);
+  console.log(`Local : http://localhost:${env.port}/api/v1/health`)
 });
 
 function shutdown(signal) {

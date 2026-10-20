@@ -5,6 +5,7 @@ const {
   parseDimeOffshoreConfirmation,
   parseNumber,
 } = require('../src/modules/ingestion/pdf/dime-parser.service');
+const { parseDimeDocument } = require('../src/modules/ingestion/pdf/dime-document-parser.service');
 
 const DIME_TEXT = `
 ใบยืนยันการซื้อขาย / ใบเสร็จรับเงิน / ใบกำกับภาษี
@@ -62,6 +63,15 @@ test('parses accounting numbers including parentheses', () => {
   assert.equal(parseNumber('(1.23)'), -1.23);
 });
 
+test('document routing requires offshore identifier, not just a generic confirmation title', () => {
+  assert.equal(parseDimeDocument(DIME_TEXT).document.type, 'DIME_OFFSHORE_CONFIRMATION_NOTE');
+  for (const text of ['Dime Gold\nConfirmation Note / ใบยืนยันการซื้อขาย', 'Confirmation Note / Receipt / Tax Invoice', 'Dime Gold\nใบยืนยันการซื้อขาย']) {
+    assert.throws(() => parseDimeDocument(text), { status: 422, code: 'DIME_DOCUMENT_UNSUPPORTED' });
+  }
+  // Do not silently discard supported confirmation documents with extraction errors.
+  assert.throws(() => parseDimeDocument('DIMEOS202610180001\nConfirmation Note'), { code: 'DIME_ORDERS_NOT_FOUND' });
+});
+
 test('extracts Dime orders and document totals without returning raw text', () => {
   const result = parseDimeOffshoreConfirmation(DIME_TEXT);
 
@@ -108,6 +118,10 @@ test('extracts Dime orders and document totals without returning raw text', () =
     cashFlowType: 'CASH_OUT',
   });
   assert.deepEqual(result.validation, { isValid: true, warnings: [] });
+  assert.equal(result.display.totalFeeIncludeVatAfterDiscount, 1.63);
+  assert.equal(result.display.totalFeesAndTaxes, 1.63);
+  assert.equal(result.display.totalBuy, result.summary.totalBuy);
+  assert.deepEqual(result.diagnostics.validation, result.validation);
   assert.equal(Object.hasOwn(result, 'text'), false);
   assert.equal(Object.hasOwn(result, 'textPreview'), false);
 });
@@ -125,7 +139,54 @@ test('subtracts discount before adding VAT to the total fee', () => {
   assert.equal(result.summary.totalFeeAfterDiscountExcludeVat, 3.38);
   assert.equal(result.calculation.totalFeeIncludeVatAfterDiscount, 3.62);
   assert.equal(result.calculation.totalFeesAndTaxes, 3.62);
+  assert.equal(result.display.totalFeeIncludeVatAfterDiscount, 3.62);
+  assert.equal(result.display.discount, 1.23);
   assert.deepEqual(result.validation, { isValid: true, warnings: [] });
+});
+
+test('display uses stated PDF fee including zero while mismatch stays in diagnostics', () => {
+  const text = DIME_TEXT.replace('974.49\n0.00\n1.52\n0.00\n0.11', '974.49\n0.00\n4.61\n0.00\n0.00')
+    .concat('\n0.00\n(1.23) Discount\nส่วนลด (THB)\nTotal Fee After Discount\nค่าธรรมเนียมหลังหักส่วนลด\nไม่รวมภาษีมูลค่าเพิ่ม (THB)\n(Exclude VAT)');
+  const result = parseDimeOffshoreConfirmation(text);
+  assert.equal(result.display.source, 'PDF');
+  assert.equal(result.display.totalFeeAfterDiscountExcludeVat, 0);
+  assert.equal(result.display.totalFeeIncludeVatAfterDiscount, 0);
+  assert.equal(result.display.totalFeesAndTaxes, 0);
+  assert.equal(result.calculation.totalFeeIncludeVatAfterDiscount, 3.38);
+  assert.equal(result.calculation.totalFeesAndTaxes, 3.38);
+  assert.deepEqual(result.validation, { isValid: true, warnings: [] });
+  assert.deepEqual(result.diagnostics.validation, { isValid: false, warnings: [{ code: 'FEE_AFTER_DISCOUNT_MISMATCH' }] });
+});
+
+test('nonzero PDF net fee drives display independently of calculated fee', () => {
+  const text = DIME_TEXT.concat('\n0.50\n0.00 Discount\nส่วนลด (THB)\nTotal Fee After Discount');
+  const result = parseDimeOffshoreConfirmation(text);
+  assert.equal(result.display.totalFeeIncludeVatAfterDiscount, 0.61);
+  assert.equal(result.display.totalFeesAndTaxes, 0.61);
+  assert.equal(result.calculation.totalFeeIncludeVatAfterDiscount, 1.63);
+  assert.equal(result.diagnostics.validation.isValid, false);
+});
+
+test('missing discount details stay null instead of silently using a calculated total', () => {
+  const result = parseDimeOffshoreConfirmation(DIME_TEXT.concat('\nDiscount\nTotal Fee After Discount'));
+  assert.equal(result.summary.totalFeeAfterDiscountExcludeVat, null);
+  assert.equal(result.summary.discount, null);
+  assert.equal(result.display.totalFeeIncludeVatAfterDiscount, null);
+  assert.equal(result.display.totalFeesAndTaxes, null);
+  assert.equal(result.calculation.totalFeeIncludeVatAfterDiscount, null);
+  assert.ok(result.validation.warnings.some(w => w.code === 'FEE_DISCOUNT_DETAILS_NOT_FOUND'));
+});
+
+test('missing summary and unrelated validation warnings remain visible', () => {
+  const result = parseDimeOffshoreConfirmation(DIME_TEXT.replace('24 สิงหาคม 2569', 'missing date'));
+  assert.equal(result.summary, null);
+  assert.equal(result.display.totalBuy, null);
+  assert.equal(result.display.totalFeesAndTaxes, null);
+  assert.equal(result.calculation.totalFeesAndTaxes, null);
+  assert.ok(result.validation.warnings.some(w => w.code === 'SUMMARY_NOT_FOUND'));
+  assert.equal(result.validation.isValid, false);
+  const wrongBuy = parseDimeOffshoreConfirmation(DIME_TEXT.replace('974.49\n0.00\n1.52', '999.00\n0.00\n1.52'));
+  assert.ok(wrongBuy.validation.warnings.some(w => w.code === 'TOTAL_BUY_MISMATCH'));
 });
 
 test('maps the Dime SEL code to a SELL transaction', () => {

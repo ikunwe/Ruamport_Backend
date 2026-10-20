@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { parseDimeDocument } = require('../src/modules/ingestion/pdf/dime-document-parser.service');
+const { parseDimeMonthlyStatement } = require('../src/modules/ingestion/pdf/dime-monthly-statement-parser.service');
 
 const MONTHLY_TEXT = `
 รายงานบัญชีหลักทรัพย์ต่างประเทศประจำเดือน
@@ -66,8 +67,8 @@ Tesla, Inc. Common Stock
 รวม 100.00% + 12.04% + 154.89 1,441.35
 `;
 
-test('auto-detects and parses a Dime monthly statement', () => {
-  const result = parseDimeDocument(MONTHLY_TEXT);
+test('retained monthly parser still works for future development', () => {
+  const result = parseDimeMonthlyStatement(MONTHLY_TEXT);
 
   assert.deepEqual(result.document, {
     type: 'DIME_MONTHLY_STATEMENT',
@@ -97,4 +98,10 @@ test('auto-detects and parses a Dime monthly statement', () => {
   assert.equal(result.holdings[3].totalReturnPercentage, -8.01);
   assert.equal(result.holdings[3].totalReturn, -6.8);
   assert.deepEqual(result.validation, { isValid: true, warnings: [] });
+});
+
+test('public document parser temporarily rejects monthly statements', () => {
+  for (const text of [MONTHLY_TEXT, `${MONTHLY_TEXT}\nConfirmation Note\nDIMETH2026090300011218`]) {
+    assert.throws(() => parseDimeDocument(text), { status: 422, code: 'DIME_MONTHLY_TEMPORARILY_DISABLED' });
+  }
 });

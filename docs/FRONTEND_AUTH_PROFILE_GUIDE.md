@@ -1,5 +1,7 @@
 # Frontend Auth & Profile Integration Guide
 
+อัปเดตระบบลงทุน: หลัง SQL 007 การอ่าน Preview จะบันทึกข้อมูลที่ parse และประวัติอ่านลง DB แล้ว แต่ยังไม่สร้างรายการลงทุนจนกด POST /trades/import รองรับ record.id/status, ALREADY_READ และ ALREADY_IMPORTED ดู [คู่มือบันทึกรายการลงทุน](FRONTEND_INVESTMENT_IMPORT_GUIDE.md) สำหรับ endpoint และ flow ใหม่
+
 เอกสารนี้เป็นแนวทางสำหรับแก้ Angular Frontend ให้ทำงานตรงกับ Backend และ Supabase Auth เมื่อผู้ใช้ Login ด้วยหลาย Social Providers แต่ใช้อีเมลเดียวกัน
 
 ## 1. หลักการสำคัญ
@@ -450,11 +452,26 @@ export interface PdfUploadPreviewResponse {
     totalBuy: number;
     totalSell: number;
     totalFeeExcludeVat: number;
-    discount: number;
-    totalFeeAfterDiscountExcludeVat: number;
+    discount: number | null;
+    totalFeeAfterDiscountExcludeVat: number | null;
     totalVat: number;
     withholdingTax: number;
   } | null;
+  // Offshore only: use display for UI, never calculation for paid fees.
+  display: {
+    source: 'PDF';
+    currency: 'THB';
+    totalBuy: number | null;
+    totalSell: number | null;
+    totalFeeExcludeVat: number | null;
+    discount: number | null;
+    totalFeeAfterDiscountExcludeVat: number | null;
+    totalVat: number | null;
+    withholdingTax: number | null;
+    totalFeeIncludeVatAfterDiscount: number | null;
+    totalFeesAndTaxes: number | null;
+    derivedFields: string[];
+  };
   calculation: {
     totalFeeIncludeVatAfterDiscount: number | null;
     totalFeesAndTaxes: number | null;
@@ -464,6 +481,9 @@ export interface PdfUploadPreviewResponse {
   validation: {
     isValid: boolean;
     warnings: Array<{ code: string; orderId?: string }>;
+  };
+  diagnostics: {
+    validation: { isValid: boolean; warnings: Array<{ code: string; orderId?: string }> };
   };
 }
 
@@ -664,16 +684,21 @@ uploadPdfPreview(file: File, pdfPassword?: string) {
 ```
 
 รหัสรายการหุ้นไทย: `BUY → BUY`, `SEL/SELL → SELL`, `REW → REWARD`
-- `totalFeeIncludeVatAfterDiscount` คำนวณจาก `totalFeeExcludeVat - discount + totalVat`
-- ฝั่ง Frontend แสดงค่าธรรมเนียมรวม VAT หลังส่วนลดได้โดยใช้
-  `{{ formatAmount(preview.calculation?.totalFeeIncludeVatAfterDiscount ?? 0) }}`
-  โดยไม่ต้องนำ `discount` มาลบซ้ำอีก
+- สำหรับหุ้นนอก (`DIME_OFFSHORE_CONFIRMATION_NOTE`) ยอดแสดงผลให้ใช้ `preview.display` ไม่ใช้ `preview.calculation` และไม่ลบ discount ซ้ำ: `display.totalFeeIncludeVatAfterDiscount` รวมจาก **totalFeeAfterDiscountExcludeVat ที่ PDF ระบุ + totalVat** ส่วน `display.totalFeesAndTaxes` เพิ่ม withholdingTax ที่ PDF ระบุ เป็นยอดรวมจากข้อมูลในเอกสาร ไม่ใช่ค่าที่อ่านตรงจากช่องเดียว จึงระบุชื่อไว้ใน `derivedFields`
+- ตัวอย่าง Angular (ใช้เงื่อนไข null ไม่ใช้ `?? 0` เพราะยอดอ่านไม่ได้ไม่ใช่ศูนย์):
+  `{{ preview.display?.totalFeeIncludeVatAfterDiscount == null ? 'อ่านยอดไม่ได้' : formatAmount(preview.display.totalFeeIncludeVatAfterDiscount) }}`
+- `summary` ยังคงข้อมูลเอกสาร, `calculation` ยังคงการคำนวณอิสระเดิมสำหรับตรวจสอบเท่านั้น ห้ามใช้เป็น fallback แทนยอด PDF ที่อ่านไม่พบ ต้องแสดงสถานะอ่านยอดไม่ได้ หากเป็นเอกสารรุ่นเก่าที่ไม่มีส่วนลดและไม่มีช่องยอดหลังส่วนลด จะใช้ค่าธรรมเนียมก่อน VAT ที่เอกสารระบุและส่วนลด 0; แต่ถ้ามีหัวข้อส่วนลดแล้วอ่านตัวเลขไม่พบจะคืน null ไม่เดายอด
+- `FEE_AFTER_DISCOUNT_MISMATCH` เก็บเฉพาะใน `diagnostics.validation` สำหรับผู้พัฒนา ไม่ส่งใน `validation.warnings` ที่หน้า Preview ใช้ จึงไม่ทำให้ public `validation.isValid` เป็น false เพียงเพราะสูตรส่วนลดไม่ตรง แต่ยังตรวจสอบความผิดปกติชนิดอื่นตามเดิม ห้ามสรุปจาก mismatch ว่าเป็นสิทธิ์ฟรีค่าคอมรายการแรกของเดือนโดยอัตโนมัติ
+- อย่านำ `diagnostics.validation` มาแสดงเป็น popup/คำเตือนหรือใช้บล็อก Preview ทั่วไป calculation/diagnostics เก็บแยกใน response และในเอกสาร Preview หลัง SQL 007 แล้ว ไม่ใช้ยอดคำนวณทับยอด PDF
+- หุ้นไทยและกองทุนยังใช้ `summary` ตาม schema เดิม ไม่มี `display` หรือ `diagnostics` ชุดนี้ ให้แยก UI ตาม `document.type`
 
-### Monthly Statement
+### Monthly Statement (ปิดชั่วคราว / ฟีเจอร์ในอนาคต)
 
-Endpoint เดิมตรวจชนิดเอกสารอัตโนมัติ เมื่อ `document.type` เป็น
-`DIME_MONTHLY_STATEMENT` response จะมี `overview`, `assetAllocation` และ
-`holdings` แทน `orders` และ `summary` ของ Confirmation Note
+เอกสาร Dime Gold และประเภทอื่นที่ไม่รองรับจะไม่ถูกเลือกเป็น offshore เพียงเพราะมีหัวข้อ Confirmation Note อีกต่อไป Backend ตรวจรหัส DIMEOS/DIMETH/DIMEMF จากเนื้อหา การอัปโหลดตรงที่ไม่รองรับคืน `422 DIME_DOCUMENT_UNSUPPORTED` ส่วน Gmail จะไม่ส่งรายการที่ไม่รองรับกลับมาแสดง (ไม่ใช่รายการ PARSE_FAILED) ข้อผิดพลาดจาก Confirmation ที่รองรับยังแสดงตามปกติ
+
+ตอนนี้รองรับเฉพาะ Confirmation ของหุ้นนอก หุ้นไทย และกองทุน การอัปโหลด Monthly จะตอบ HTTP `422` พร้อม `error.code = DIME_MONTHLY_TEMPORARILY_DISABLED` ให้แสดงว่า “ปิดการอ่าน Monthly ชั่วคราว กรุณาใช้ Confirmation” และซ่อนตัวเลือก Monthly ใน UI ไม่ใช่แจ้งว่า PDF เสีย
+
+เก็บ parser และตัวอย่างด้านล่างไว้เป็นแนวทางอนาคตเท่านั้น ยังไม่มี endpoint สาธารณะที่คืน Preview Monthly เมื่อกลับมาเปิดใช้งาน `document.type` เป็น `DIME_MONTHLY_STATEMENT` จะมี `overview`, `assetAllocation` และ `holdings` แทน `orders` และ `summary` ของ Confirmation Note
 
 ```json
 {
@@ -726,7 +751,7 @@ Endpoint เดิมตรวจชนิดเอกสารอัตโน�
 - Monthly Statement ไม่มีเลข `No.` ในเอกสาร จึงใช้เลขบัญชีร่วมกับเดือนรายงานสร้าง `deduplicationKey`
 - `totalFeesAndTaxes` คือค่าธรรมเนียมหลังหักส่วนลดรวม VAT แล้วบวก Withholding Tax
 - `netCashFlow < 0` หมายถึงเงินออกจากบัญชี และ `> 0` หมายถึงเงินเข้า
-- `validation.warnings` แจ้งยอดที่ไม่ตรงกัน โดย Frontend ต้องไม่อนุญาต Import ต่อเมื่อ `isValid` เป็น `false`
+- `validation.warnings` แจ้งยอดที่ไม่ตรงกัน แต่หลัง SQL 008 ไม่บล็อกการยืนยัน Import จาก isValid=false ให้ใช้ record.canImport แทน และแสดง calculatedValue เทียบ pdfValue จากคำเตือนเมื่อมี ค่าคำนวณรวมเก็บแยกใน calculation.investmentTotals ไม่ทับ display/summary ตาม PDF
 - `pageCount` อาจเป็น `null` ถ้า parser ไม่คืนข้อมูลจำนวนหน้า
 
 ### UI flow ที่แนะนำ
@@ -737,7 +762,7 @@ Endpoint เดิมตรวจชนิดเอกสารอัตโน�
 → กด Preview
 → แสดง Loading
 → สำเร็จ: แสดงตาราง Orders และสรุปยอดซื้อ/ขาย/ค่าธรรมเนียม/ภาษี
-→ ถ้า validation ไม่ผ่าน: แสดงคำเตือนและยังไม่ให้ยืนยัน Import
+→ ถ้า validation ไม่ผ่าน: แสดงคำเตือนเปรียบเทียบยอด แต่ยังให้ยืนยัน Import เมื่อ record.canImport=true
 → รหัสผิด: ให้กรอกใหม่
 → ไม่มีข้อความ: แจ้งว่าไฟล์อาจเป็นภาพสแกน
 ```

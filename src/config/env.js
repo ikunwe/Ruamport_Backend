@@ -22,6 +22,13 @@ const env = Object.freeze({
   supabaseUrl: process.env.SUPABASE_URL,
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  gmailClientId: process.env.GMAIL_CLIENT_ID,
+  gmailClientSecret: process.env.GMAIL_CLIENT_SECRET,
+  gmailRedirectUri: process.env.GMAIL_REDIRECT_URI,
+  gmailFrontendReturnUrl: process.env.GMAIL_FRONTEND_RETURN_URL,
+  mailTokenEncryptionKey: process.env.MAIL_TOKEN_ENCRYPTION_KEY,
+  dimeMailSenderDomains: (process.env.DIME_MAIL_SENDER_DOMAINS || 'dime.co.th')
+    .split(',').map((domain) => domain.trim().toLowerCase()).filter(Boolean),
 });
 
 function requireSupabaseEnv() {

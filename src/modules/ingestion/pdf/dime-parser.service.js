@@ -158,14 +158,15 @@ function extractSummary(text) {
   if (values.length === 5) {
     const [totalBuy, totalSell, totalFeeExcludeVat, withholdingTax, totalVat] = values;
     const discountDetails = extractDiscountDetails(text);
+    const hasDiscountSection = /Total Fee After Discount|\bDiscount\b|ส่วนลด/i.test(text);
     return {
       currency: 'THB',
       totalBuy,
       totalSell,
       totalFeeExcludeVat,
-      discount: discountDetails?.discount ?? 0,
+      discount: discountDetails?.discount ?? (hasDiscountSection ? null : 0),
       totalFeeAfterDiscountExcludeVat:
-        discountDetails?.totalFeeAfterDiscountExcludeVat ?? totalFeeExcludeVat,
+        discountDetails?.totalFeeAfterDiscountExcludeVat ?? (hasDiscountSection ? null : totalFeeExcludeVat),
       totalVat,
       withholdingTax,
     };
@@ -238,11 +239,13 @@ function validateParsedDocument(orders, summary) {
       }
     }
 
-    const calculatedFeeAfterDiscount = roundMoney(
-      summary.totalFeeExcludeVat - summary.discount,
-    );
-    if (!approximatelyEqual(calculatedFeeAfterDiscount, summary.totalFeeAfterDiscountExcludeVat)) {
-      warnings.push({ code: 'FEE_AFTER_DISCOUNT_MISMATCH' });
+    if (![summary.totalFeeExcludeVat, summary.discount, summary.totalFeeAfterDiscountExcludeVat].every(Number.isFinite)) {
+      warnings.push({ code: 'FEE_DISCOUNT_DETAILS_NOT_FOUND' });
+    } else {
+      const calculatedFeeAfterDiscount = roundMoney(summary.totalFeeExcludeVat - summary.discount);
+      if (!approximatelyEqual(calculatedFeeAfterDiscount, summary.totalFeeAfterDiscountExcludeVat)) {
+        warnings.push({ code: 'FEE_AFTER_DISCOUNT_MISMATCH' });
+      }
     }
   }
 
@@ -262,19 +265,43 @@ function parseDimeOffshoreConfirmation(text) {
   }
 
   const summary = extractSummary(text);
-  const validation = validateParsedDocument(orders, summary);
-  const totalFeeIncludeVatAfterDiscount = summary
+  const internalValidation = validateParsedDocument(orders, summary);
+  const visibleWarnings = internalValidation.warnings.filter(warning => warning.code !== 'FEE_AFTER_DISCOUNT_MISMATCH');
+  const validation = { isValid: visibleWarnings.length === 0, warnings: visibleWarnings };
+  const totalFeeIncludeVatAfterDiscount = summary && [summary.totalFeeExcludeVat, summary.discount, summary.totalVat].every(Number.isFinite)
     ? roundMoney(summary.totalFeeExcludeVat - summary.discount + summary.totalVat)
     : null;
-  const totalFeesAndTaxes = summary
+  const totalFeesAndTaxes = summary && Number.isFinite(totalFeeIncludeVatAfterDiscount) && Number.isFinite(summary.withholdingTax)
     ? roundMoney(totalFeeIncludeVatAfterDiscount + summary.withholdingTax)
     : null;
   const netCashFlow = summary ? roundMoney(summary.totalSell - summary.totalBuy) : null;
+  // Use the PDF's stated net fee, never substitute the independently calculated fee.
+  const statedFeeWithVat = summary && [summary.totalFeeAfterDiscountExcludeVat, summary.totalVat].every(Number.isFinite)
+    ? roundMoney(summary.totalFeeAfterDiscountExcludeVat + summary.totalVat)
+    : null;
+  const display = {
+    source: 'PDF',
+    currency: summary?.currency ?? 'THB',
+    totalBuy: summary?.totalBuy ?? null,
+    totalSell: summary?.totalSell ?? null,
+    totalFeeExcludeVat: summary?.totalFeeExcludeVat ?? null,
+    discount: summary?.discount ?? null,
+    totalFeeAfterDiscountExcludeVat: summary?.totalFeeAfterDiscountExcludeVat ?? null,
+    totalVat: summary?.totalVat ?? null,
+    withholdingTax: summary?.withholdingTax ?? null,
+    totalFeeIncludeVatAfterDiscount: statedFeeWithVat,
+    totalFeesAndTaxes: Number.isFinite(statedFeeWithVat) && Number.isFinite(summary?.withholdingTax)
+      ? roundMoney(statedFeeWithVat + summary.withholdingTax)
+      : null,
+    // These two totals combine stated PDF amounts; they are not printed fields.
+    derivedFields: ['totalFeeIncludeVatAfterDiscount', 'totalFeesAndTaxes'],
+  };
 
   return {
     document,
     orders,
     summary,
+    display,
     calculation: {
       totalFeeIncludeVatAfterDiscount,
       totalFeesAndTaxes,
@@ -282,6 +309,7 @@ function parseDimeOffshoreConfirmation(text) {
       cashFlowType: netCashFlow === null ? null : netCashFlow < 0 ? 'CASH_OUT' : netCashFlow > 0 ? 'CASH_IN' : 'NONE',
     },
     validation,
+    diagnostics: { validation: internalValidation },
   };
 }
 

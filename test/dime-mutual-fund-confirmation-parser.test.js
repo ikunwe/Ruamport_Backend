@@ -84,3 +84,30 @@ test('auto-detects and parses a Dime mutual fund confirmation note', () => {
   assert.deepEqual(result.calculation, { netCashFlow: -100, cashFlowType: 'CASH_OUT' });
   assert.deepEqual(result.validation, { isValid: true, warnings: [] });
 });
+
+test('parses a fund name containing spaces without losing its amounts', () => {
+  const text = MUTUAL_FUND_TEXT
+    .replace('2202608110004728 SUB SCBS&P500 3.3902 0.49 100.00 29.4963',
+      '2202609030008115 SUB KKP US500-UH-E 108.8921 4.00 1,500.00 13.7751')
+    .replace('100.00\nThe above transaction', '1,500.00\nThe above transaction')
+    .replace('0.46\n', '3.74\n')
+    .replace('0.03\n', '0.26\n')
+    .replace('0.04\n', '0.00\n');
+  const result = parseDimeDocument(text);
+
+  assert.deepEqual(result.orders[0], {
+    orderId: '2202609030008115',
+    tradeDate: '2026-08-11',
+    transactionCode: 'SUB',
+    transactionType: 'SUBSCRIPTION',
+    fundName: 'KKP US500-UH-E',
+    units: 108.8921,
+    navPerUnit: 13.7751,
+    currency: 'THB',
+    totalAmount: 1500,
+    feeIncludeVat: 4,
+  });
+  assert.equal(result.summary.totalSubscription, 1500);
+  assert.equal(result.summary.totalFeeIncludeVat, 4);
+  assert.deepEqual(result.validation, { isValid: true, warnings: [] });
+});
