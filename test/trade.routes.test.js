@@ -65,6 +65,83 @@ test('rate HTTP outage returns 503 while holdings still returns original financi
   assert.equal(body.displayThb, null);
   assert.deepEqual(body.items[0].amounts, data.items[0].amounts);
 });
+
+test('market holdings HTTP shares only quotes across owners, not private quantities or costs', async t => {
+  const { createInvestmentService } = require('../src/modules/trades/investment.service');
+  const { createStockPriceService } = require('../src/modules/trades/stock-price.service');
+  const time = Date.parse('2026-10-20T15:00:00Z');
+  let upstreamCalls = 0;
+  const marketPrices = createStockPriceService({ apiKey: 'server-only-key', now: () => time, fetchQuote: async input => {
+    upstreamCalls++;
+    return { ok: true, status: 200, json: async () => new URL(input).pathname.endsWith('/stock/symbol')
+      ? [{ symbol: 'AMD', currency: 'USD', mic: 'XNGS' }] : { c: 150, t: time / 1000 - 60 } };
+  } });
+  const investments = createInvestmentService({ marketPrices, repository: { holdings: async user => ({ items: [{
+    assetType: 'OFFSHORE_STOCK', currency: 'USD', symbol: 'AMD', exchange: 'XNAS', quantity: user === 'A' ? 2 : 5,
+    costBasis: [{ currency: 'USD', status: 'CALCULATED', remainingCost: user === 'A' ? 200 : 600 }],
+  }] }) } });
+  const base = await serverFor(t, { investments, authenticate: (req, _res, next) => { req.user = { id: req.headers['x-test-owner'] }; next(); } });
+  const responses = await Promise.all(['A', 'B'].map(owner => fetch(base + '/holdings?includeMarket=true&symbol=ARBITRARY&userId=other', { headers: { 'x-test-owner': owner } })));
+  assert.ok(responses.every(response => response.status === 200));
+  assert.ok(responses.every(response => response.headers.get('cache-control') === 'no-store'));
+  const [a, b] = await Promise.all(responses.map(response => response.json()));
+  assert.equal(upstreamCalls, 2);
+  assert.equal(a.items[0].marketValuation.usd.marketValue, 300);
+  assert.equal(a.items[0].marketValuation.quote.cachePolicy, 'MARKET_OPEN_TTL');
+  assert.equal(a.items[0].marketValuation.quote.marketSchedule.state, 'OPEN');
+  assert.equal(a.items[0].marketValuation.quote.marketSchedule.sessionCloseAt, '2026-10-20T20:00:00.000Z');
+  assert.equal(a.items[0].marketValuation.usd.unrealizedPnl, 100);
+  assert.equal(b.items[0].marketValuation.usd.marketValue, 750);
+  assert.equal(b.items[0].marketValuation.usd.unrealizedPnl, 150);
+  assert.equal(JSON.stringify(a).includes('server-only-key'), false);
+  assert.equal(Object.hasOwn(a, 'fx'), false);
+});
+
+test('market HTTP setup failure is advisory and invalid includeMarket is a 400', async t => {
+  const { createInvestmentService } = require('../src/modules/trades/investment.service');
+  const { createStockPriceService } = require('../src/modules/trades/stock-price.service');
+  const investments = createInvestmentService({ repository: { holdings: async () => ({ items: [{
+    assetType: 'OFFSHORE_STOCK', currency: 'USD', symbol: 'AMD', exchange: 'XNAS', quantity: 2,
+  }] }) }, marketPrices: createStockPriceService({ apiKey: '' }) });
+  const base = await serverFor(t, { investments, authenticate: (req, _res, next) => { req.user = { id: 'owner' }; next(); } });
+  const response = await fetch(base + '/holdings?includeMarket=true');
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.items[0].marketValuation.quote.errorCode, 'MARKET_DATA_CONFIG_MISSING');
+  assert.equal(body.items[0].marketValuation.usd.marketValue, null);
+  const invalid = await fetch(base + '/holdings?includeMarket=yes');
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error.code, 'INVALID_HOLDINGS_FILTER');
+});
+
+test('logo opt-in HTTP returns safe public URL separately from valuation, without exposing the provider key', async t => {
+  const { createInvestmentService } = require('../src/modules/trades/investment.service');
+  const { createStockPriceService } = require('../src/modules/trades/stock-price.service');
+  let calls = 0;
+  const marketPrices = createStockPriceService({ apiKey: 'private-key', fetchQuote: async input => {
+    assert.ok(['/api/v1/stock/symbol', '/api/v1/stock/profile2'].includes(new URL(input).pathname));
+    calls++;
+    return { ok: true, status: 200, json: async () => new URL(input).pathname.endsWith('/stock/symbol')
+      ? [{ symbol: 'AMD', currency: 'USD', mic: 'XNGS' }] : { ticker: 'AMD', logo: 'https://static2.finnhub.io/file/publicdatany/finnhubimage/stock_logo/AMD.png' } };
+  } });
+  const investments = createInvestmentService({ marketPrices, repository: { holdings: async user => {
+    assert.equal(user, 'owner');
+    return { items: [{ assetType: 'OFFSHORE_STOCK', currency: 'USD', symbol: 'AMD', exchange: 'XNAS', quantity: 2 }] };
+  } } });
+  const base = await serverFor(t, { investments, authenticate: (req, _res, next) => { req.user = { id: 'owner' }; next(); } });
+  for (let i = 0; i < 2; i++) {
+    const response = await fetch(base + '/holdings?includeLogos=true&symbol=OTHER');
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const body = await response.json();
+    assert.equal(body.items[0].logoUrl, 'https://static2.finnhub.io/file/publicdatany/finnhubimage/stock_logo/AMD.png');
+    assert.equal(body.items[0].logo.status, 'AVAILABLE');
+    assert.equal(Object.hasOwn(body.items[0], 'marketValuation'), false);
+    assert.equal(JSON.stringify(body).includes('private-key'), false);
+  }
+  assert.equal(calls, 2);
+  assert.equal((await fetch(base + '/holdings?includeLogos=1')).status, 400);
+});
 test('import and list always use authenticated user, never request userId', async t => {
   const calls = [];
   const investments = {

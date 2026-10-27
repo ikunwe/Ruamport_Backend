@@ -125,4 +125,4 @@ const needsReview = cost?.status === 'INCOMPLETE';
 
 - `npm test`: service/repository/HTTP response source/fee exclusion/null handling
 - `test/holdings-mutual-fund-average-cost.integration.sql`: ซื้อเพิ่ม ขายบางส่วน ขายหมด เปิดรอบใหม่ เศษหน่วย สกุลเงิน ข้อมูลไม่ครบ mapping totalAmount ของข้อมูลเก่า การตัดซ้ำ และยืนยันว่ารายการดิบไม่เปลี่ยน (development DB หลัง 018, BEGIN/ROLLBACK)
-- `node verify-investment-sql.cjs tmp/cost-basis-validation`: migrations 007–018 และ SQL 9 ชุดบน PGlite ในหน่วยความจำ ไม่ใช้ .env/ข้อมูลฐานจริง
+- `node scripts/verification/verify-investment-sql.cjs tmp/cost-basis-validation`: migrations 007–018 และ SQL 9 ชุดบน PGlite ในหน่วยความจำ ไม่ใช้ .env/ข้อมูลฐานจริง

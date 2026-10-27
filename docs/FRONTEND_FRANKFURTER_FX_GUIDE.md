@@ -4,7 +4,56 @@ Backend เพิ่ม Frankfurter v2 เพื่อแปลงยอดห�
 
 ไม่ต้องเพิ่ม SQL, ย้ายข้อมูล, sync/import ใหม่ หรือตั้ง API key เพิ่ม
 
+การตรวจ rateDate ใช้วันปฏิทิน Asia/Bangkok (UTC+7) ไม่อิง timezone ของเครื่อง server: วันที่ตรงกับวันนี้ของไทยรับได้แม้ UTC ยังเป็นวันก่อนหน้า วันที่เกินวันนี้ของไทยหรือย้อนหลังตั้งแต่ 7 วันปฏิทินขึ้นไปยังถูกปฏิเสธ ทั้งตอนโหลดใหม่และใช้ cache สำรอง ส่วน TTL 1 ชั่วโมง/อายุ cache สูงสุด 24 ชั่วโมงยังวัดเวลาที่ผ่านไปจริงตามเดิม fetchedAt/expiresAt ยังคงส่ง ISO UTC ลงท้าย Z และ rateDate ยังคงวันที่เดิมจาก provider ไม่ปรับหรือสร้างวันที่ใหม่แทน
+
 ## Endpoint ที่แนะนำสำหรับหน้า Port
+
+### Fallback เมื่อ latest ส่งวันที่อนาคต
+
+หากข้อมูลล่าสุดมีวันที่เกินวันนี้ของไทย Backend จะไม่ใช้แถวนั้น แต่เรียก Frankfurter `/v2/rates` เพิ่มหนึ่งครั้ง ระบุ base=USD, quotes=THB และช่วง from=วันนี้ลบ 6 วัน ถึง to=วันนี้ จากนั้นเลือกวันที่ใหม่ที่สุดในช่วงที่ไม่เกินวันนี้ จึงใช้เรทวันนี้ได้หากมี หรือวันประกาศก่อนหน้าล่าสุดหากวันนี้ไม่มีข้อมูล ไม่เดินเรียกทีละวันและไม่แก้วันที่ provider ให้ดูเป็นวันนี้ อ้างอิง [Frankfurter Historical/Time Series API](https://frankfurter.dev/)
+
+ตัวอย่างฟิลด์ที่เพิ่มใน response เรท หรือ holdings.fx:
+
+```json
+{
+  "status": "AVAILABLE",
+  "source": "FRANKFURTER",
+  "rate": 33.709,
+  "rateDate": "2026-10-24",
+  "selectionMode": "HISTORICAL_FALLBACK",
+  "fallbackReason": "FUTURE_RATE_DATE",
+  "requestedThroughDate": "2026-10-24",
+  "fromCache": false,
+  "isStale": false
+}
+```
+
+selectionMode=LATEST หมายถึงใช้ endpoint ล่าสุดตามปกติ ส่วน HISTORICAL_FALLBACK หมายถึงเลือกจากประวัติหลัง latest มีวันที่อนาคต requestedThroughDate คือขอบบนวันไทยที่ใช้ค้นหา **ไม่ใช่วันที่จริงของเรท** ให้ใช้ rateDate แสดงวันที่เสมอ fallbackReason อธิบายเหตุที่ไปใช้ history ไม่ใช่ error เมื่อ status=AVAILABLE Frontend ไม่ต้องเรียกเรทย้อนหลังเอง
+
+history fallback ที่เพิ่งดึงผ่าน validation ยังมี isStale=false แม้ rateDate เป็นวันก่อนหน้า สถานะนี้บอก freshness ของ cache ไม่ได้แปลว่าวันนี้ต้องมีประกาศใหม่ การใช้ cache สำรองเก่าหลัง refresh ล้มเหลวยังคง isStale=true และ warning ตามเดิม โดยคง selectionMode ของเรทที่เก็บไว้
+
+ปกติหนึ่ง refresh ใช้ 1 คำขอ กรณี latest วันที่อนาคตใช้สูงสุด 2 คำขอ (latest+history) มี timeout รวมชุดเดิม 5 วินาที ทั้งคู่แชร์ single-flight/cache 1 ชั่วโมง จึงไม่เพิ่มคำขอทุกครั้งที่ Frontend เรียก ไม่เพิ่ม env/API key/SQL และไม่เปลี่ยนยอด PDF
+
+หาก history ไม่มีข้อมูลที่ผ่านในช่วงอายุไม่ถึง 7 วันไทย และไม่มี cache สำรอง จะตอบ 503 reason=HISTORICAL_RATE_UNAVAILABLE หากประวัติผิดรูปแบบหรือวันที่ล่าสุดในช่วงมีเรทขัดกันจะตอบ INVALID_RESPONSE ไม่เลือกวันเก่ามาปิดบังความขัดแย้ง การเชื่อมต่อ/HTTP/timeout ยังคงรายงาน reason ตามสาเหตุ และ retry backoff 1 นาทีเหมือนเดิม ไม่ fallback history สำหรับ timeout/HTTP error ของ endpoint ล่าสุดที่ไม่ใช่ปัญหาวันที่อนาคต
+
+### รายละเอียดเมื่อ endpoint เรทตอบ 503
+
+`error.code` ยังคง FX_RATE_UNAVAILABLE แต่ message เป็นข้อความที่ปลอดภัยและแยกสาเหตุ มี reason และ retryAt เพิ่ม เช่น:
+
+```json
+{
+  "error": {
+    "code": "FX_RATE_UNAVAILABLE",
+    "message": "The provider rate date is later than the current date in Thailand",
+    "reason": "FUTURE_RATE_DATE",
+    "retryAt": "2026-10-23T18:01:00.000Z"
+  }
+}
+```
+
+reason อาจเป็น TIMEOUT (หมดเวลารอ), NETWORK_ERROR (เชื่อมต่อไม่ได้), UPSTREAM_HTTP_ERROR (HTTP ไม่สำเร็จ), UPSTREAM_RATE_LIMITED (429), INVALID_RESPONSE (JSON/คู่เงิน/เรท/วันที่ผิดรูปแบบ), FUTURE_RATE_DATE (เกินวันนี้ไทย), RATE_TOO_OLD (อายุวันที่เรทตั้งแต่ 7 วันไทย) ให้ใช้ reason/code ใน logic ไม่ parse message ใช้ retryAt ประกอบการลองใหม่ ไม่ยิงวนทันที ระหว่าง backoff จะคงสาเหตุล่าสุด ไม่ส่ง raw upstream body/URL/headers หรือรายละเอียด network ภายใน
+
+เมื่อใช้ cache สำรอง endpoint ยังตอบ 200 ตามเดิม พร้อม warning=FX_REFRESH_FAILED_USING_CACHED_RATE และเพิ่ม reason/retryAt เพื่ออธิบายเหตุ refresh ไม่สำเร็จ ฟิลด์ snapshot อื่นไม่เปลี่ยน กรณี 5xx ของระบบส่วนอื่นยังไม่เปิดเผยข้อความภายใน การแก้ข้อความนี้ไม่ได้ทำให้เรทที่ไม่ผ่าน validation ถูกยอมรับ
 
 ```http
 GET /api/v1/trades/holdings?includeFx=true

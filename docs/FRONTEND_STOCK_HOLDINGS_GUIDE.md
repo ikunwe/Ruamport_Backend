@@ -1,5 +1,9 @@
 # แสดงยอดถือครองหุ้นและกองทุน
 
+โลโก้สำหรับประวัติซื้อขาย: `includeClosed=true&includeLogos=true` คืนรูปหุ้นนอก/หุ้นไทยที่ขายหมดแล้วด้วย โดยไม่ต้องเปิด includeMarket/includeFx ดู [คู่มือ closed stock logos](FRONTEND_CLOSED_STOCK_LOGOS_GUIDE.md) เพื่อจับคู่กับ transactions; ไม่เปลี่ยนรูปแบบหรือราคาของประวัติเดิม
+
+อัปเดตข้อมูลตลาด: includeMarket=true เพิ่มราคาหุ้นไทยจาก Yahoo Finance และ NAV กองทุนจาก SEC Open API แล้ว อ่าน [คู่มือ Frontend หุ้นไทย/กองทุน](FRONTEND_THAI_STOCK_AND_FUND_MARKET_GUIDE.md) สำหรับฟิลด์ใหม่ วิธีตั้ง SEC_API_KEY และสถานะที่ต้องรองรับ ไม่ต้องเพิ่ม SQL หรือ import ใหม่
+
 อัปเดต 018: [ต้นทุนกองทุน Average Cost](FRONTEND_MUTUAL_FUND_AVERAGE_COST_GUIDE.md) ใช้ totalAmount รายคำสั่งจาก PDF โดยไม่รวมค่าธรรมเนียมแล้ว ไม่ต้องมี grossAmount ในข้อมูลเก่า
 
 ล่าสุด 017: [วิธีต้นทุนแยกสินทรัพย์](FRONTEND_ASSET_COST_METHODS_GUIDE.md) คือหุ้นนอก Compressed FIFO / หุ้นไทย FIFO / กองทุน Average Cost โดยคงข้อมูลถือครองและยอดเงินเดิม
@@ -20,7 +24,7 @@
 - หุ้นยัง BUY−SELL ตามเดิม switchInUnits/switchOutUnits=0 และเกณฑ์ปิดเศษ 011 ยังใช้เฉพาะหุ้น กองทุนไม่ปัดเป็นศูนย์ด้วย ±0.0000003 โดยอัตโนมัติ (roundingTolerance ของแถวนั้น=null, roundingAdjusted=false)
 - rawQuantity/quantity, HELD/CLOSED/NEGATIVE, includeClosed และการกันคำสั่งซ้ำยังทำงานเหมือนเดิม รวมถึงการเตือนเมื่อมีรายการที่ยังไม่รองรับ ค่า duplicateOrdersExcluded ตอนนี้นับกองทุนด้วย
 - Top-level roundingTolerance ยังเป็นเกณฑ์ของหุ้นเพื่อ compatibility มี roundingAppliesTo ระบุประเภทที่ใช้ อย่าเอาค่านี้ไปปัดหน่วยกองทุนเอง
-- ยังไม่คำนวณต้นทุน/NAV ล่าสุด/มูลค่าปัจจุบันของกองทุน ไม่ใช้ยอดเงินมาเดาจำนวนหน่วย
+- SQL 012 เดิมรวมเฉพาะจำนวนหน่วย; ต่อมา migration 018 เพิ่มต้นทุน Average Cost และ Backend เพิ่ม NAV/มูลค่าปัจจุบันผ่าน includeMarket=true ตามคู่มือข้อมูลตลาด ไม่ใช้ยอดเงินมาเดาจำนวนหน่วย
 
 ตัวอย่างแถวกองทุน:
 

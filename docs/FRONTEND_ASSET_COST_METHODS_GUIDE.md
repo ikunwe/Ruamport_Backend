@@ -116,4 +116,4 @@ const remaining = thb?.remainingCost;
 
 ## ทดสอบ
 
-`test/holdings-asset-cost-methods.integration.sql` ตรวจสามวิธีผ่าน RPC เดียว และ FIFO รายล็อต ขายบางส่วน/ข้ามล็อต ขายหมด เศษหุ้น ข้อมูลไม่ครบ ลำดับวันเดียวกัน ตัดซ้ำ และแยกผู้ใช้ รันบน development DB หลัง 017 โดยใช้ BEGIN/ROLLBACK หรือ `node verify-investment-sql.cjs tmp/cost-basis-validation` เพื่อรันทดสอบ migrations 007–017 และ SQL ทั้งชุดใน PGlite แบบ in-memory โดยไม่อ่าน .env/เชื่อม Supabase จริง
+`test/holdings-asset-cost-methods.integration.sql` ตรวจสามวิธีผ่าน RPC เดียว และ FIFO รายล็อต ขายบางส่วน/ข้ามล็อต ขายหมด เศษหุ้น ข้อมูลไม่ครบ ลำดับวันเดียวกัน ตัดซ้ำ และแยกผู้ใช้ รันบน development DB หลัง 017 โดยใช้ BEGIN/ROLLBACK หรือ `node scripts/verification/verify-investment-sql.cjs tmp/cost-basis-validation` เพื่อรันทดสอบ migrations 007–017 และ SQL ทั้งชุดใน PGlite แบบ in-memory โดยไม่อ่าน .env/เชื่อม Supabase จริง

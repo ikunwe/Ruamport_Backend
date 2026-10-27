@@ -21,6 +21,7 @@
   },
   "homepage": "https://github.com/ikunwe/PortfolioManage_Backend#readme",
   "dependencies": {
+    "@mathieuc/tradingview": "4.1.0",
     "@supabase/supabase-js": "^2.112.4",
     "cors": "^2.8.6",
     "express": "^5.2.1",

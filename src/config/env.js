@@ -15,6 +15,12 @@ function parseCorsOrigins(value) {
     .filter(Boolean);
 }
 
+function positiveInteger(value, fallback, name) {
+  const parsed = value === undefined || value === '' ? fallback : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer`);
+  return parsed;
+}
+
 const env = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parsePort(process.env.PORT),
@@ -27,6 +33,17 @@ const env = Object.freeze({
   gmailRedirectUri: process.env.GMAIL_REDIRECT_URI,
   gmailFrontendReturnUrl: process.env.GMAIL_FRONTEND_RETURN_URL,
   mailTokenEncryptionKey: process.env.MAIL_TOKEN_ENCRYPTION_KEY,
+  finnhubApiKey: process.env.FINNHUB_API_KEY,
+  secApiKey: process.env.SEC_API_KEY || '',
+  logoDevPublishableKey: (process.env.LOGO_DEV_PUBLISHABLE_KEY || '').trim(),
+  thaiPriceCacheTtlSeconds: positiveInteger(process.env.THAI_PRICE_CACHE_TTL_SECONDS, 900, 'THAI_PRICE_CACHE_TTL_SECONDS'),
+  fundNavCacheTtlSeconds: positiveInteger(process.env.FUND_NAV_CACHE_TTL_SECONDS, 3600, 'FUND_NAV_CACHE_TTL_SECONDS'),
+  stockPriceCacheTtlSeconds: positiveInteger(process.env.STOCK_PRICE_CACHE_TTL_SECONDS, 900, 'STOCK_PRICE_CACHE_TTL_SECONDS'),
+  stockLogoCacheTtlSeconds: positiveInteger(process.env.STOCK_LOGO_CACHE_TTL_SECONDS, 604800, 'STOCK_LOGO_CACHE_TTL_SECONDS'),
+  stockNewsCacheTtlSeconds: positiveInteger(process.env.STOCK_NEWS_CACHE_TTL_SECONDS, 1800, 'STOCK_NEWS_CACHE_TTL_SECONDS'),
+  finnhubCallsPerMinute: positiveInteger(process.env.FINNHUB_CALLS_PER_MINUTE, 60, 'FINNHUB_CALLS_PER_MINUTE'),
+  finnhubCallsPerDay: process.env.FINNHUB_CALLS_PER_DAY === '0' || !process.env.FINNHUB_CALLS_PER_DAY
+    ? 0 : positiveInteger(process.env.FINNHUB_CALLS_PER_DAY, 0, 'FINNHUB_CALLS_PER_DAY'),
   dimeMailSenderDomains: (process.env.DIME_MAIL_SENDER_DOMAINS || 'dime.co.th')
     .split(',').map((domain) => domain.trim().toLowerCase()).filter(Boolean),
 });
@@ -44,4 +61,4 @@ function requireSupabaseEnv() {
   }
 }
 
-module.exports = { env, requireSupabaseEnv };
+module.exports = { env, requireSupabaseEnv, positiveInteger };

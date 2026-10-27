@@ -102,7 +102,7 @@ test('failed refresh does not overwrite a valid snapshot with a malformed payloa
 });
 
 test('a previously valid rate that ages beyond seven days is not served as a fallback', async () => {
-  let time = Date.parse('2026-10-20T00:00:00Z');
+  let time = Date.parse('2026-10-19T17:00:00Z'); // Midnight 20 October in Thailand.
   let calls = 0;
   const service = createFrankfurterService({ now: () => time, fetchRate: async () => {
     if (++calls > 1) throw new Error('Unavailable');
@@ -113,6 +113,36 @@ test('a previously valid rate that ages beyond seven days is not served as a fal
   assert.equal((await service.getRate()).isStale, true);
   time += 1;
   await assert.rejects(service.getRate(), { code: 'FX_RATE_UNAVAILABLE' });
+});
+
+test('Thai current rate date is accepted after Thai midnight while UTC is still yesterday', async () => {
+  const time = Date.parse('2026-10-23T17:00:00Z');
+  const service = createFrankfurterService({ now: () => time,
+    fetchRate: async () => ok({ ...ROW, date: '2026-10-24' }) });
+  const result = await service.getRate();
+  assert.equal(result.status, 'AVAILABLE');
+  assert.equal(result.rateDate, '2026-10-24');
+  assert.equal(result.fetchedAt, '2026-10-23T17:00:00.000Z');
+  assert.equal((await service.getRate()).fromCache, true);
+});
+
+test('Thai tomorrow is rejected even one millisecond before local midnight', async () => {
+  for (const [time, date] of [
+    ['2026-10-23T16:59:59.999Z', '2026-10-24'],
+    ['2026-10-23T17:00:00Z', '2026-10-25'],
+  ]) {
+    const service = createFrankfurterService({ now: () => Date.parse(time), fetchRate: async () => ok({ ...ROW, date }) });
+    await assert.rejects(service.getRate(), { code: 'FX_RATE_UNAVAILABLE' });
+  }
+});
+
+test('cold rates seven Thai calendar days old are rejected and six days old remain valid', async () => {
+  const time = Date.parse('2026-10-23T17:00:00Z'); // Thai date 24 October.
+  for (const [date, valid] of [['2026-10-18', true], ['2026-10-17', false]]) {
+    const service = createFrankfurterService({ now: () => time, fetchRate: async () => ok({ ...ROW, date }) });
+    if (valid) assert.equal((await service.getRate()).rateDate, date);
+    else await assert.rejects(service.getRate(), { code: 'FX_RATE_UNAVAILABLE' });
+  }
 });
 
 test('network timeout is bounded and does not expose abort details', async () => {

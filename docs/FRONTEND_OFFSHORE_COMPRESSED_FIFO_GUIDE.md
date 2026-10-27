@@ -131,4 +131,4 @@ const remainingUsd = usd?.remainingCost;
 
 - `npm test`: service/repository/HTTP contract และ metadata แบบแยกสินทรัพย์
 - `test/holdings-compressed-fifo.integration.sql`: แยก FIFO ปกติ/เฉลี่ย/Compressed FIFO ด้วยข้อมูลจำลอง ทดสอบรวมล็อตรายวัน ขายข้ามล็อต สกุลเงินอิสระ เศษหุ้น ข้อมูลไม่ครบ การตัดซ้ำ/สิทธิ์ผู้ใช้ และยืนยันว่าหุ้นไทยไม่เปลี่ยนสูตร (development DB หลัง 016, BEGIN/ROLLBACK)
-- `node verify-investment-sql.cjs tmp/cost-basis-validation`: รัน migrations 007–016 และ SQL ทั้งชุดใน PGlite แบบ in-memory ไม่อ่าน .env หรือเชื่อม Supabase จริง
+- `node scripts/verification/verify-investment-sql.cjs tmp/cost-basis-validation`: รัน migrations 007–016 และ SQL ทั้งชุดใน PGlite แบบ in-memory ไม่อ่าน .env หรือเชื่อม Supabase จริง

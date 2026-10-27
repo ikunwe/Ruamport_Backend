@@ -1,5 +1,7 @@
 # ต้นทุนเฉลี่ยและต้นทุนคงเหลือ (015–016)
 
+อัปเดต 019: เพิ่มต้นทุนส่วนที่ขายและกำไรขายแล้วก่อนค่าธรรมเนียมใน items[].realizedPnl โดยใช้ต้นทุนคงเหลือเดิม ดู [คู่มือ Realized PnL](FRONTEND_REALIZED_PNL_GUIDE.md) ไม่เปลี่ยนฟิลด์ costBasis เดิม
+
 ล่าสุด 018: [กองทุนคำนวณ Average Cost จาก totalAmount ที่อ่านจาก PDF ได้แล้ว](FRONTEND_MUTUAL_FUND_AVERAGE_COST_GUIDE.md) ไม่ต้องมี grossAmount ดิบ ข้อจำกัดกองทุนที่ขาด gross ในรุ่นเก่าด้านล่างไม่ใช่เงื่อนไขปัจจุบัน
 
 **ล่าสุด 017:** หุ้นนอก Compressed FIFO, หุ้นไทย FIFO, กองทุน Average Cost ดู [คู่มือวิธีต้นทุนแยกสินทรัพย์](FRONTEND_ASSET_COST_METHODS_GUIDE.md) เนื้อหาและตัวอย่าง 015–016 ด้านล่างอธิบายวิธีในรุ่นก่อนหน้า
@@ -143,4 +145,4 @@ const needsHistoryCheck = usd?.status === 'INCOMPLETE';
 
 - `npm test`: service/repository/HTTP contract โดย mock ฐานข้อมูล
 - `test/holdings-average-cost.integration.sql`: สูตร ลำดับ สกุลเงิน เศษหุ้น ข้อมูลไม่ครบ การตัดซ้ำ/แยกผู้ใช้และ RPC บน development DB หลัง 015 ใช้ BEGIN/ROLLBACK
-- `verify-investment-sql.cjs`: ตัวเลือกทดสอบ migrations 007–016 และ SQL ทั้งชุดด้วย PGlite ในหน่วยความจำ ไม่อ่าน .env ไม่เชื่อม Supabase จริง ดูวิธีติดตั้งเฉพาะโฟลเดอร์ทดสอบที่ต้นไฟล์ ไม่เพิ่ม dependency runtime ของ Backend
+- `scripts/verification/verify-investment-sql.cjs`: ตัวเลือกทดสอบ migrations 007–016 และ SQL ทั้งชุดด้วย PGlite ในหน่วยความจำ ไม่อ่าน .env ไม่เชื่อม Supabase จริง ดูวิธีติดตั้งเฉพาะโฟลเดอร์ทดสอบที่ต้นไฟล์ ไม่เพิ่ม dependency runtime ของ Backend
