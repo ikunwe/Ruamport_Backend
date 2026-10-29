@@ -187,3 +187,9 @@ Callback ส่ง error ผ่าน query `code`: MAIL_OAUTH_STATE_INVALID (ex
 ก่อน public launch ต้องทบทวน Google verification ของ Gmail read-only ซึ่งเป็น restricted scope และข้อกำหนดการใช้ข้อมูล รวมถึง production HTTPS, secret management และ rate limiting ห้ามถือว่าแค่สร้าง OAuth client แล้วพร้อมเปิดให้ทุกคนใช้
 
 อ้างอิงทางการ: [Google OAuth web server](https://developers.google.com/identity/protocols/oauth2/web-server), [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes), [ค้นหาเมลและ pagination](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list), [อ่าน attachment](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages.attachments/get)
+## Android / Flutter callback
+
+เชื่อม Gmail จาก native Flutter ด้วย `POST /mail/gmail/connect {"client":"mobile"}`; เว็บส่ง `{}` ได้ตามเดิม Backend ผูกปลายทางกับ encrypted state และส่งกลับ deep link มือถือ ดู [flow, API และการทดสอบ Emulator](FRONTEND_MOBILE_GMAIL_CONNECTION_GUIDE.md) โดยเฉพาะ `adb reverse` สำหรับ Google callback localhost ไม่ต้องเพิ่ม SQL/env ใหม่
+
+เมื่อเริ่มเชื่อมใหม่ตามลำดับ pending ของผู้ใช้คนนั้นจะถูกแทนที่: เริ่มบนเว็บแล้วไปเริ่มบนมือถือก่อนจบ จะทำให้ state เว็บเก่าใช้ไม่ได้ โดยไม่กระทบ pending ของคนอื่นหรือ connection ที่สำเร็จแล้ว ดูข้อจำกัด concurrent connect ในคู่มือข้างต้น Callback พร้อมกันของ state เดียวกันยัง consume ได้ครั้งเดียว
+

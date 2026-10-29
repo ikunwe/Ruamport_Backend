@@ -7,6 +7,8 @@ const { createGmailClient, READ_SCOPE } = require('./gmail-client');
 const { createMailRepository } = require('./mail.repository');
 const { dateRange, collectPreview } = require('./mail-preview.service');
 const { createInvestmentService } = require('../trades/investment.service');
+// Only server-owned destinations are accepted; never redirect to a caller-supplied URL.
+const MOBILE_RETURN_URL = 'io.ruamport.mobile://mail/return';
 function createMailService({ config = env, repository = createMailRepository(), client = createGmailClient(config), now = () => new Date(), collect = collectPreview, investments = createInvestmentService() } = {}) {
   const syncing = new Set();
   function configured() {
@@ -40,13 +42,21 @@ function createMailService({ config = env, repository = createMailRepository(), 
       const connected = Boolean(stored && stored.email.toLowerCase() === user.email.toLowerCase());
       return { ...route, supported: route.channel === 'GMAIL_API', connected, connection: connected ? { provider: stored.provider, email: stored.email, connectedAt: stored.connected_at } : null };
     },
-    async connect(user) {
+    async connect(user, body = {}) {
       requireGmail(user);
+      if (!body || typeof body !== 'object' || Array.isArray(body)
+        || Object.keys(body).some(name => name !== 'client')
+        || (body.client !== undefined && !['web', 'mobile'].includes(body.client))) {
+        throw new AppError(400, 'INVALID_MAIL_CLIENT', 'Choose web or mobile for Gmail authorization');
+      }
+      const returnClient = body.client || 'web';
       const key = configured();
       const state = crypto.randomBytes(32).toString('base64url');
       const verifier = crypto.randomBytes(48).toString('base64url');
       const expiresAt = new Date(now().getTime() + 10 * 60 * 1000).toISOString();
-      await repository.saveState({ state_hash: hash(state), user_id: user.id, expected_email: user.email.toLowerCase(), verifier_encrypted: encrypt(verifier, key), expires_at: expiresAt });
+      // Reuse the encrypted state column. Legacy pending states contain just a verifier.
+      const payload = JSON.stringify({ version: 1, verifier, client: returnClient });
+      await repository.saveState({ state_hash: hash(state), user_id: user.id, expected_email: user.email.toLowerCase(), verifier_encrypted: encrypt(payload, key), expires_at: expiresAt });
       const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
       const params = { client_id: config.gmailClientId, redirect_uri: config.gmailRedirectUri, response_type: 'code', scope: READ_SCOPE, state, access_type: 'offline', prompt: 'consent', login_hint: user.email, code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' };
       for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
@@ -57,20 +67,39 @@ function createMailService({ config = env, repository = createMailRepository(), 
       if (typeof query.state !== 'string' || query.state.length > 256) throw new AppError(400, 'MAIL_OAUTH_STATE_INVALID', 'Missing OAuth state');
       const state = await repository.consumeState(hash(query.state));
       if (!state || Date.parse(state.expires_at) <= now().getTime()) throw new AppError(400, 'MAIL_OAUTH_STATE_INVALID', 'OAuth state expired or already used');
-      if (query.error) throw new AppError(400, 'MAIL_CONSENT_DENIED', 'Gmail connection was not authorized');
-      if (typeof query.code !== 'string' || query.code.length > 4096) throw new AppError(400, 'MAIL_OAUTH_CODE_INVALID', 'Missing authorization code');
-      const tokens = await client.exchangeCode(query.code, decrypt(state.verifier_encrypted, key));
-      if (!tokens.access_token || !tokens.refresh_token || !(tokens.scope || '').split(' ').includes(READ_SCOPE)) throw new AppError(422, 'MAIL_PERMISSION_REQUIRED', 'Grant Gmail read access and reconnect');
-      const profile = await client.profile(tokens.access_token);
-      if (profile.emailAddress?.toLowerCase() !== state.expected_email) {
-        await client.revoke(tokens.refresh_token);
-        throw new AppError(422, 'MAIL_EMAIL_MISMATCH', 'Connect the same Gmail address as the signed-in account');
+      const decoded = decrypt(state.verifier_encrypted, key);
+      let verifier = decoded, returnClient = 'web';
+      if (decoded.startsWith('{')) {
+        let payload;
+        try { payload = JSON.parse(decoded); } catch { throw new AppError(400, 'MAIL_OAUTH_STATE_INVALID', 'Invalid OAuth state'); }
+        if (payload.version !== 1 || !['web', 'mobile'].includes(payload.client)
+          || typeof payload.verifier !== 'string' || !/^[A-Za-z0-9_-]{43,128}$/.test(payload.verifier)) {
+          throw new AppError(400, 'MAIL_OAUTH_STATE_INVALID', 'Invalid OAuth state');
+        }
+        verifier = payload.verifier; returnClient = payload.client;
       }
-      await repository.saveConnection({ user_id: state.user_id, provider: 'GOOGLE', email: profile.emailAddress.toLowerCase(), refresh_token_encrypted: encrypt(tokens.refresh_token, key), scopes: tokens.scope, connected_at: now().toISOString() });
+      try {
+        if (query.error) throw new AppError(400, 'MAIL_CONSENT_DENIED', 'Gmail connection was not authorized');
+        if (typeof query.code !== 'string' || query.code.length > 4096) throw new AppError(400, 'MAIL_OAUTH_CODE_INVALID', 'Missing authorization code');
+        const tokens = await client.exchangeCode(query.code, verifier);
+        if (!tokens.access_token || !tokens.refresh_token || !(tokens.scope || '').split(' ').includes(READ_SCOPE)) throw new AppError(422, 'MAIL_PERMISSION_REQUIRED', 'Grant Gmail read access and reconnect');
+        const profile = await client.profile(tokens.access_token);
+        if (profile.emailAddress?.toLowerCase() !== state.expected_email) {
+          await client.revoke(tokens.refresh_token);
+          throw new AppError(422, 'MAIL_EMAIL_MISMATCH', 'Connect the same Gmail address as the signed-in account');
+        }
+        await repository.saveConnection({ user_id: state.user_id, provider: 'GOOGLE', email: profile.emailAddress.toLowerCase(), refresh_token_encrypted: encrypt(tokens.refresh_token, key), scopes: tokens.scope, connected_at: now().toISOString() });
+        return { client: returnClient };
+      } catch (error) {
+        // Set only after consuming/decrypting a valid owner-bound state, including denial.
+        const failure = error instanceof AppError ? error : new AppError(503, 'MAIL_CONNECTION_FAILED', 'Gmail connection failed');
+        failure.mailReturnClient = returnClient;
+        throw failure;
+      }
     },
-    returnUrl(errorCode) {
+    returnUrl(errorCode, returnClient = 'web') {
       configured();
-      const url = new URL(config.gmailFrontendReturnUrl);
+      const url = new URL(returnClient === 'mobile' ? MOBILE_RETURN_URL : config.gmailFrontendReturnUrl);
       url.searchParams.set('mailConnection', errorCode ? 'error' : 'connected');
       if (errorCode) url.searchParams.set('code', errorCode);
       return url.toString();

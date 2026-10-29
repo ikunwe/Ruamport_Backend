@@ -15,6 +15,12 @@ npm run dev
 
 The first endpoint is `GET http://localhost:3000/api/v1/health`.
 
+For Frontend startup/reconnection handling, see [Backend readiness and bounded GET retry](docs/FRONTEND_BACKEND_READINESS_GUIDE.md). It specifies a shared public health gate (at most 4 probes/10 seconds), then at most 2 extra attempts for eligible read-only GET network failures. Mutations and HTTP/provider errors are not automatically retried. This is a Frontend implementation guide; runtime behavior is unchanged.
+
+## Gmail authorization on Android
+
+Gmail connect now accepts `{"client":"mobile"}` and returns from Backend to a fixed Flutter deep link bound to encrypted OAuth state. Web clients remain compatible with `{}`. No new SQL/env is required; restart Backend and rebuild Flutter. Local Emulator callback URLs using localhost require `adb reverse tcp:3000 tcp:3000`. See [Mobile Gmail flow and setup](docs/FRONTEND_MOBILE_GMAIL_CONNECTION_GUIDE.md).
+
 ## Read-only sale simulator
 
 Run **022_sell_simulator.sql after 021**, then restart. Authenticated `POST /api/v1/trades/simulate-sale` uses the existing database cost engines: offshore Compressed FIFO, Thai FIFO and mutual-fund Moving Weighted Average. Returns native-currency before/after quantities, remaining costs, average costs, sold cost and hypothetical profit before fees/taxes/FX. No transactions or portfolio changes are saved and no market providers are called. Ambiguous or missing cost data returns `INCOMPLETE` with null dependent values. See [Frontend sale simulator contract](docs/FRONTEND_SELL_SIMULATOR_GUIDE.md). No new environment variables or PDF reimport are needed.

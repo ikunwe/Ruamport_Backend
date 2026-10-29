@@ -15,8 +15,58 @@ function fixture(collectOverride) {
   const collect = async options => ({ results: [{ status: 'READY', preview: { document: { deduplicationKey: 'dime:1' } } }], nextPageToken: options.pageToken ? null : 'page-2', scannedMessages: 1, foundPdfCount: 3, unreadableMessages: 0 });
   const service = createMailService({ config, repository, client, collect: collectOverride || collect, now: () => clock });
   const authorize = async () => { const result = await service.connect(user); const state = new URL(result.authorizationUrl).searchParams.get('state'); await service.callback({ state, code: 'code' }); return state; };
-  return { service, client, repository, authorize, setClock: value => { clock = new Date(value); } };
+  return { service, client, repository, states, authorize, setClock: value => { clock = new Date(value); } };
 }
+
+test('mobile Gmail destination is encrypted into state and cannot be overridden by callback query', async () => {
+  const f = fixture();
+  const authorization = new URL((await f.service.connect(user, { client: 'mobile' })).authorizationUrl);
+  const row = [...f.states.values()][0];
+  const payload = JSON.parse(decrypt(row.verifier_encrypted, encryptionKey(config.mailTokenEncryptionKey)));
+  assert.equal(payload.client, 'mobile');
+  assert.equal(row.user_id, user.id);
+  assert.ok(!JSON.stringify(row).includes(payload.verifier));
+  f.client.exchangeCode = async (code, verifier) => {
+    assert.equal(code, 'google-code'); assert.equal(verifier, payload.verifier);
+    assert.equal(authorization.searchParams.get('code_challenge'), require('node:crypto').createHash('sha256').update(verifier).digest('base64url'));
+    return { access_token: 'access', refresh_token: 'refresh', scope: READ_SCOPE };
+  };
+  const result = await f.service.callback({ state: authorization.searchParams.get('state'), code: 'google-code', client: 'web', returnUrl: 'https://evil.invalid' });
+  assert.deepEqual(result, { client: 'mobile' });
+  const target = new URL(f.service.returnUrl(undefined, result.client));
+  assert.equal(target.href, 'io.ruamport.mobile://mail/return?mailConnection=connected');
+  assert.equal((await f.service.status(user)).connected, true);
+  await assert.rejects(f.service.callback({ state: authorization.searchParams.get('state'), code: 'google-code', client: 'mobile' }), e => e.code === 'MAIL_OAUTH_STATE_INVALID' && !e.mailReturnClient);
+});
+
+test('mobile denial and provider failure keep only state-bound destination and controlled error', async () => {
+  for (const denied of [true, false]) {
+    const f = fixture();
+    const state = new URL((await f.service.connect(user, { client: 'mobile' })).authorizationUrl).searchParams.get('state');
+    if (!denied) f.client.exchangeCode = async () => { throw new Error('private upstream token'); };
+    await assert.rejects(f.service.callback({ state, code: 'private-code', ...(denied ? { error: 'access_denied' } : {}) }), e => {
+      assert.equal(e.mailReturnClient, 'mobile');
+      assert.equal(e.code, denied ? 'MAIL_CONSENT_DENIED' : 'MAIL_CONNECTION_FAILED');
+      const target = f.service.returnUrl(e.code, e.mailReturnClient);
+      assert.ok(target.startsWith('io.ruamport.mobile://mail/return?mailConnection=error&code='));
+      assert.ok(!target.includes('private')); return true;
+    });
+    assert.equal(await f.repository.connection(), null);
+  }
+});
+
+test('web clients and legacy encrypted verifiers remain compatible; arbitrary redirect inputs rejected', async () => {
+  const f = fixture();
+  for (const body of [{ client: 'android' }, { returnUrl: 'https://evil.invalid' }, { client: 'mobile', userId: 'other' }, [], null]) {
+    await assert.rejects(f.service.connect(user, body), { code: 'INVALID_MAIL_CLIENT' });
+  }
+  assert.equal(f.states.size, 0);
+  const state = new URL((await f.service.connect(user)).authorizationUrl).searchParams.get('state');
+  const row = [...f.states.values()][0]; const key = encryptionKey(config.mailTokenEncryptionKey);
+  row.verifier_encrypted = encrypt(JSON.parse(decrypt(row.verifier_encrypted, key)).verifier, key);
+  assert.deepEqual(await f.service.callback({ state, code: 'code', client: 'mobile' }), { client: 'web' });
+  assert.equal(new URL(f.service.returnUrl()).origin, 'http://localhost:4200');
+});
 test('AES-GCM encrypts, detects tampering and rejects invalid keys', () => {
   const key = encryptionKey(config.mailTokenEncryptionKey);
   const token = encrypt('refresh-secret', key);

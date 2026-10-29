@@ -7,15 +7,18 @@ function createMailRouter(service = createMailService(), authenticate = requireA
   router.get('/gmail/callback', async (request, response) => {
     response.set('Cache-Control', 'no-store');
     response.set('Referrer-Policy', 'no-referrer');
-    let code;
-    try { await service.callback(request.query); }
-    catch (error) { code = error instanceof AppError ? error.code : 'MAIL_CONNECTION_FAILED'; }
-    response.redirect(303, service.returnUrl(code));
+    let code, returnClient = 'web';
+    try { const result = await service.callback(request.query); returnClient = result?.client === 'mobile' ? 'mobile' : 'web'; }
+    catch (error) {
+      code = error instanceof AppError ? error.code : 'MAIL_CONNECTION_FAILED';
+      returnClient = error.mailReturnClient === 'mobile' ? 'mobile' : 'web';
+    }
+    response.redirect(303, service.returnUrl(code, returnClient));
   });
   router.use(authenticate);
   router.use((_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
   router.get('/connection', async (request, response) => response.json(await service.status(request.user)));
-  router.post('/gmail/connect', async (request, response) => response.json(await service.connect(request.user)));
+  router.post('/gmail/connect', async (request, response) => response.json(await service.connect(request.user, request.body)));
   router.post('/gmail/sync-preview', async (request, response) => response.json(await service.sync(request.user, request.body)));
   router.delete('/gmail/connection', async (request, response) => response.json(await service.disconnect(request.user)));
   return router;
